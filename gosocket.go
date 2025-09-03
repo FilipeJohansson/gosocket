@@ -2,8 +2,12 @@ package gosocket
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // every events handlers
@@ -27,6 +31,7 @@ type Server struct {
 	server     *http.Server
 	serializers map[EncodingType]Serializer
 	isRunning   bool
+	authFunc AuthFunc
 }
 
 func New() *Server {
@@ -232,6 +237,65 @@ func (s *Server) OnPong(handler func(*Client)) *Server {
 // ===== CONTROLLERS =====
 
 func (s *Server) Start() error {
+	if s.isRunning {
+		return fmt.Errorf("server is already running")
+	}
+
+	if s.config.Port <= 0 || s.config.Port > 65535 {
+		return fmt.Errorf("invalid port: %d", s.config.Port)
+	}
+
+	if s.config.Path == "" {
+		// ? maybe don't check this? maybe the developer wants this path?
+		// s.config.Path = "/ws"
+	}
+
+	if len(s.serializers) <= 0 {
+		s.WithJSONSerializer() // JSON as default serializer
+	}
+
+	go s.hub.Run()
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc(s.config.Path, s.handleWebSocket)
+
+	var handler http.Handler = mux
+	// TODO: apply in chain middlewares
+
+	s.server = &http.Server{
+		Addr:         fmt.Sprintf(":%d", s.config.Port),
+		Handler:      handler,
+		ReadTimeout:  s.config.ReadTimeout,
+		WriteTimeout: s.config.WriteTimeout,
+	}
+
+	s.isRunning = true
+
+	fmt.Printf("GoSocket server starting on port %d, path %s\n", s.config.Port, s.config.Path)
+
+	var err error
+	// if s.config.EnableSSL {
+	// 	if s.config.CertFile == "" || s.config.KeyFile == "" {
+	// 		return fmt.Errorf("SSL enabled but cert/key files not provided")
+	// 	}
+	// 	err = s.server.ListenAndServeTLS(s.config.CertFile, s.config.KeyFile)
+	// } else {
+	err = s.server.ListenAndServe()
+	// }
+
+	s.isRunning = false
+	s.hub.Stop()
+
+	if err == http.ErrServerClosed {
+		fmt.Println("GoSocket server stopped gracefully")
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("server error: %w", err)
+	}
+
 	return nil
 }
 
@@ -332,3 +396,169 @@ func (s *Server) JoinRoom(clientID, room string) error {
 func (s *Server) LeaveRoom(clientID, room string) error {
 	return nil
 }
+
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	upgrader := websocket.Upgrader{
+		ReadBufferSize: 1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool {
+			if len(s.config.AllowedOrigins) == 0 {
+				return s.config.EnableCORS
+			}
+
+			origin := r.Header.Get("Origin")
+			for _, allowed := range s.config.AllowedOrigins {
+				if origin == allowed {
+					return true
+				}
+			}
+			return false
+		},
+	}
+
+	var userData map[string]interface{}
+	if s.authFunc != nil {
+		var err error
+		userData, err = s.authFunc(r)
+		if err != nil {
+			http.Error(w, "Authentication failed: " + err.Error(), http.StatusUnauthorized)
+			return
+		}
+	}
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		if s.handlers.OnError != nil {
+			s.handlers.OnError(nil, fmt.Errorf("websocket upgrade failed: %w", err))
+		}
+		return
+	}
+
+	clientId := generateClientID()
+	client := NewClient(clientId, conn, s.hub)
+
+	for key, value := range userData {
+		client.SetUserData(key, value)
+	}
+
+	conn.SetReadLimit(s.config.MessageSize)
+	conn.SetReadDeadline(time.Now().Add(s.config.PongWait))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(s.config.PongWait))
+		if s.handlers.OnPong != nil {
+			s.handlers.OnPong(client)
+		}
+		return nil
+	})
+
+	s.hub.Register <- client
+
+	if s.handlers.OnConnect != nil {
+		s.handlers.OnConnect(client)
+	}
+
+	go s.handleClientWrite(client)
+	go s.handleClientRead(client)
+}
+
+func (s *Server) handleClientWrite(client *Client) {
+	ticker := time.NewTicker(s.config.PingPeriod)
+	defer func()  {
+		ticker.Stop()
+		client.Conn.(*websocket.Conn).Close()
+	}()
+
+	conn := client.Conn.(*websocket.Conn)
+
+	for {
+		select {
+		case message, ok := <-client.MessageChan:
+			conn.SetWriteDeadline(time.Now().Add(s.config.WriteTimeout))
+			if !ok {
+				conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+
+			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				if s.handlers.OnError != nil {
+					s.handlers.OnError(client, err)
+				}
+				return
+			}
+		
+		case <-ticker.C:
+			conn.SetWriteDeadline(time.Now().Add(s.config.WriteTimeout))
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+
+			if s.handlers.OnPing != nil {
+				s.handlers.OnPing(client)
+			}
+		}
+	}
+}
+
+func (s *Server) handleClientRead(client *Client) {
+	defer func()  {
+		s.hub.Unregister <- client
+		client.Conn.(*websocket.Conn).Close()
+
+		if s.handlers.OnDisconnect != nil {
+			s.handlers.OnDisconnect(client)
+		}
+	}()
+
+	conn := client.Conn.(*websocket.Conn)
+
+	for {
+		messageType, data, err := conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				if s.handlers.OnError != nil {
+					s.handlers.OnError(client, err)
+				}
+			}
+			break
+		}
+
+		conn.SetReadDeadline(time.Now().Add(s.config.PongWait)) // reset read deadline
+
+		message := &Message{
+			Type: MessageType(messageType),
+			RawData: data,
+			From: client.ID,
+			Created: time.Now(),
+		}
+
+		s.processMessage(client, message)
+	}
+}
+
+func (s *Server) processMessage(client *Client, message *Message) {
+	if s.handlers.OnMessage != nil {
+		s.handlers.OnMessage(client, message)
+	}
+
+	if s.handlers.OnRawMessage != nil {
+		s.handlers.OnRawMessage(client, message.RawData)
+	}
+
+	if s.handlers.OnJSONMessage != nil {
+		var jsonData interface{}
+		if err := json.Unmarshal(message.RawData, &jsonData); err == nil {
+			message.Data = jsonData
+			message.Encoding = JSON
+			s.handlers.OnJSONMessage(client, jsonData)
+		}
+	}
+
+	s.hub.BroadcastMessage(message) //! just to test, remove this!
+
+	// TODO: add Protobuf and other formats
+}
+
+func generateClientID() string {
+	return fmt.Sprintf("client_%d", time.Now().UnixNano())
+}
+
