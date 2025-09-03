@@ -27,8 +27,9 @@ If you're interested in contributing, or want to follow progress, watch this rep
 
 ```go
 // Basic server
-ws := gosocket.New().
-    WithPort(8080).
+ws := gosocket.New()
+
+ws.WithPort(8080).
     WithPath("/ws").
     OnConnect(func(client *gosocket.Client) {
         fmt.Printf("Client connected: %s\n", client.ID)
@@ -44,8 +45,9 @@ ws.Start()
 
 ```go
 // Advanced usage with rooms and JSON
-ws := gosocket.New().
-    WithPort(8080).
+ws := gosocket.New()
+
+ws.WithPort(8080).
     WithJSONSerializer().
     OnConnect(func(client *gosocket.Client) {
         client.JoinRoom("general")
