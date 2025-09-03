@@ -1,0 +1,42 @@
+package gosocket
+
+import (
+	"net/http"
+	"time"
+)
+
+// server configurations
+type Config struct {
+	Port            int
+	Path            string
+	EnableCORS      bool
+	MaxConnections  int
+	MessageSize     int64
+	ReadTimeout     time.Duration
+	WriteTimeout    time.Duration
+	PingPeriod      time.Duration
+	PongWait        time.Duration
+	EnableSSL       bool
+	CertFile        string
+	KeyFile         string
+	AllowedOrigins  []string
+	DefaultEncoding EncodingType // default message encoding
+}
+
+type Middleware func(http.Handler) http.Handler
+type AuthFunc func(*http.Request) (map[string]interface{}, error)
+
+func DefaultConfig() *Config {
+	return &Config{
+		Port:            8080,
+		Path:            "/ws",
+		EnableCORS:      true,
+		MaxConnections:  1000,
+		MessageSize:     512,
+		ReadTimeout:     60 * time.Second,
+		WriteTimeout:    10 * time.Second,
+		PingPeriod:      54 * time.Second,
+		PongWait:        60 * time.Second,
+		DefaultEncoding: JSON,
+	}
+}
