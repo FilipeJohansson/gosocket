@@ -44,6 +44,26 @@ ws.Start()
 ```
 
 ```go
+// Basic handler
+handler := gosocket.NewHandler()
+
+handler.
+    OnConnect(func(client *gosocket.Client) error {
+        fmt.Printf("Client connected: %s\n", client.ID)
+        return nil
+    }).
+    OnMessage(func(client *gosocket.Client, message *gosocket.Message) error {
+        fmt.Printf("Received: %s\n", string(message.RawData))
+        // Echo back
+        client.Send(message.RawData)
+        return nil
+    })
+
+http.Handle("/ws", handler)
+http.ListenAndServe(":8080", nil)
+```
+
+```go
 // Advanced usage with rooms and JSON
 ws := gosocket.New()
 

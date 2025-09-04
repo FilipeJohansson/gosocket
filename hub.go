@@ -3,6 +3,7 @@ package gosocket
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 )
 
 type Hub struct {
@@ -11,6 +12,8 @@ type Hub struct {
 	Register   chan *Client
 	Unregister chan *Client
 	Broadcast  chan *Message
+	mu         sync.RWMutex
+	running    bool
 }
 
 func NewHub() *Hub {
@@ -25,25 +28,34 @@ func NewHub() *Hub {
 
 func (h *Hub) Run() {
 	fmt.Println("Hub started")
+	h.mu.Lock()
+	h.running = true
+	h.mu.Unlock()
 
 	for {
 		select {
 		case client := <-h.Register:
+			h.mu.Lock()
 			h.Clients[client] = true
+			h.mu.Unlock()
 			fmt.Printf("Client registered: %s (total: %d)\n", client.ID, len(h.Clients))
 
 		case client := <-h.Unregister:
+			h.mu.Lock()
 			if _, exists := h.Clients[client]; exists {
 				delete(h.Clients, client)
 				close(client.MessageChan)
 
-				h.removeClientFromAllRooms(client)
+				h.removeClientFromAllRoomsUnsafe(client)
 
 				fmt.Printf("Client unregistered: %s (total: %d)\n", client.ID, len(h.Clients))
 			}
+			h.mu.Unlock()
 
 		case message := <-h.Broadcast:
+			h.mu.RLock()
 			h.broadcastToClients(message, h.Clients)
+			h.mu.RUnlock()
 		}
 	}
 }
@@ -51,12 +63,62 @@ func (h *Hub) Run() {
 func (h *Hub) Stop() {
 	fmt.Println("Hub stopping...")
 
+	h.mu.Lock()
+	if !h.running {
+		h.mu.Unlock()
+		return
+	}
+	h.running = false
+
 	for client := range h.Clients {
-		close(client.MessageChan)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("Recovered from panic closing client channel: %v\n", r)
+				}
+			}()
+			if client.MessageChan != nil {
+				close(client.MessageChan)
+			}
+		}()
 	}
 
 	h.Clients = make(map[*Client]bool)
 	h.Rooms = make(map[string]map[*Client]bool)
+	h.mu.Unlock()
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("Recovered from panic in Stop(): %v\n", r)
+			}
+		}()
+		if h.Register != nil {
+			close(h.Register)
+		}
+	}()
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("Recovered from panic in Stop(): %v\n", r)
+			}
+		}()
+		if h.Unregister != nil {
+			close(h.Unregister)
+		}
+	}()
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("Recovered from panic in Stop(): %v\n", r)
+			}
+		}()
+		if h.Broadcast != nil {
+			close(h.Broadcast)
+		}
+	}()
 
 	fmt.Println("Hub stopped")
 }
@@ -74,13 +136,28 @@ func (h *Hub) BroadcastMessage(message *Message) {
 }
 
 func (h *Hub) BroadcastToRoom(room string, message *Message) {
-	if roomClients, exists := h.Rooms[room]; exists {
-		h.broadcastToClients(message, roomClients)
-		fmt.Printf("Message broadcasted to room %s (%d clients)\n", room, len(roomClients))
+	h.mu.RLock()
+
+	var clientsCopy map[*Client]bool
+	roomClients, exists := h.Rooms[room]
+	if exists {
+		clientsCopy = make(map[*Client]bool)
+		for client, value := range roomClients {
+			clientsCopy[client] = value
+		}
+	}
+	h.mu.RUnlock()
+
+	if exists {
+		h.broadcastToClients(message, clientsCopy)
+		fmt.Printf("Message broadcasted to room %s (%d clients)\n", room, len(clientsCopy))
 	}
 }
 
 func (h *Hub) JoinRoom(client *Client, room string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	if h.Rooms[room] == nil {
 		h.Rooms[room] = make(map[*Client]bool)
 		fmt.Printf("Room created: %s\n", room)
@@ -91,6 +168,9 @@ func (h *Hub) JoinRoom(client *Client, room string) {
 }
 
 func (h *Hub) LeaveRoom(client *Client, room string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	if roomClients, exists := h.Rooms[room]; exists {
 		if _, clientInRoom := roomClients[client]; clientInRoom {
 			delete(roomClients, client)
@@ -106,6 +186,9 @@ func (h *Hub) LeaveRoom(client *Client, room string) {
 }
 
 func (h *Hub) GetRoomClients(room string) []*Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
 	var clients []*Client
 	if roomClients, exists := h.Rooms[room]; exists {
 		for client := range roomClients {
@@ -116,6 +199,9 @@ func (h *Hub) GetRoomClients(room string) []*Client {
 }
 
 func (h *Hub) GetStats() map[string]interface{} {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
 	stats := make(map[string]interface{})
 
 	stats["total_clients"] = len(h.Clients)
@@ -136,6 +222,21 @@ func (h *Hub) removeClientFromAllRooms(client *Client) {
 	}
 }
 
+func (h *Hub) removeClientFromAllRoomsUnsafe(client *Client) {
+	for roomName, roomClients := range h.Rooms {
+		if _, clientInRoom := roomClients[client]; clientInRoom {
+			delete(roomClients, client)
+			fmt.Printf("Client %s left room: %s\n", client.ID, roomName)
+
+			// remove room if empty
+			if len(roomClients) == 0 {
+				delete(h.Rooms, roomName)
+				fmt.Printf("Room deleted (empty): %s\n", roomName)
+			}
+		}
+	}
+}
+
 func (h *Hub) broadcastToClients(message *Message, clients map[*Client]bool) {
 	data := message.RawData
 	if data == nil && message.Data != nil {
@@ -145,6 +246,7 @@ func (h *Hub) broadcastToClients(message *Message, clients map[*Client]bool) {
 		}
 	}
 
+	var clientsToRemove []*Client
 	for client := range clients {
 		select {
 		case client.MessageChan <- data:
@@ -152,7 +254,11 @@ func (h *Hub) broadcastToClients(message *Message, clients map[*Client]bool) {
 		default:
 			// client channel full or closed? remove him
 			fmt.Printf("Client %s channel full/closed, removing\n", client.ID)
-			h.RemoveClient(client)
+			clientsToRemove = append(clientsToRemove, client)
 		}
+	}
+
+	for _, client := range clientsToRemove {
+		h.RemoveClient(client)
 	}
 }

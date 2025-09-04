@@ -5,32 +5,40 @@ import (
 	"time"
 )
 
-// server configurations
-type Config struct {
-	Port            int
-	Path            string
-	EnableCORS      bool
+type HandlerConfig struct {
 	MaxConnections  int
 	MessageSize     int64
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
 	PingPeriod      time.Duration
 	PongWait        time.Duration
-	EnableSSL       bool
-	CertFile        string
-	KeyFile         string
 	AllowedOrigins  []string
 	DefaultEncoding EncodingType // default message encoding
+}
+
+type ServerConfig struct {
+	Port       int
+	Path       string
+	EnableCORS bool
+	EnableSSL  bool
+	CertFile   string
+	KeyFile    string
 }
 
 type Middleware func(http.Handler) http.Handler
 type AuthFunc func(*http.Request) (map[string]interface{}, error)
 
-func DefaultConfig() *Config {
-	return &Config{
-		Port:            8080,
-		Path:            "/ws",
-		EnableCORS:      true,
+func DefaultServerConfig() *ServerConfig {
+	return &ServerConfig{
+		Port:       8080,
+		Path:       "/ws",
+		EnableCORS: true,
+		EnableSSL:  false,
+	}
+}
+
+func DefaultHandlerConfig() *HandlerConfig {
+	return &HandlerConfig{
 		MaxConnections:  1000,
 		MessageSize:     512,
 		ReadTimeout:     60 * time.Second,

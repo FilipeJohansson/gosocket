@@ -1,6 +1,9 @@
 package gosocket
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 type Serializer interface {
 	Marshal(v interface{}) ([]byte, error)
@@ -22,13 +25,11 @@ const (
 type JSONSerializer struct{}
 
 func (j JSONSerializer) Marshal(v interface{}) ([]byte, error) {
-	// implement json.Marshal
-	return nil, nil
+	return json.Marshal(v)
 }
 
 func (j JSONSerializer) Unmarshal(data []byte, v interface{}) error {
-	// implement json.Unmarshal
-	return nil
+	return json.Unmarshal(data, v)
 }
 
 func (j JSONSerializer) ContentType() string {
