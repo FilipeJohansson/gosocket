@@ -31,6 +31,7 @@ type Handler struct {
 	authFunc    AuthFunc
 	upgrader    websocket.Upgrader
 	hubRunning  sync.Once
+	middlewares []Middleware
 	mu          sync.RWMutex
 }
 
@@ -125,7 +126,10 @@ func (h *Handler) WithRawSerializer() *Handler {
 }
 
 func (h *Handler) WithMiddleware(middleware Middleware) *Handler {
-	// h.middlewares = append(h.middlewares, middleware)
+	if h.middlewares == nil {
+		h.middlewares = make([]Middleware, 0)
+	}
+	h.middlewares = append(h.middlewares, middleware)
 	return h
 }
 
@@ -212,7 +216,32 @@ func (h *Handler) OnPong(handler func(*Client) error) *Handler {
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.ensureHubRunning()
-	h.handleWebSocket(w, r)
+
+	if len(h.middlewares) > 0 {
+		wsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h.handleWebSocket(w, r)
+		})
+
+		// apply middlewares and run
+		finalHandler := h.ApplyMiddlewares(wsHandler)
+		finalHandler.ServeHTTP(w, r)
+	} else {
+		// no middlewares, just run directly
+		h.handleWebSocket(w, r)
+	}
+}
+
+func (h *Handler) ApplyMiddlewares(handler http.Handler) http.Handler {
+	if len(h.middlewares) == 0 {
+		return handler
+	}
+
+	finalHandler := handler
+	for i := len(h.middlewares) - 1; i >= 0; i-- {
+		finalHandler = h.middlewares[i](finalHandler)
+	}
+
+	return finalHandler
 }
 
 func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {

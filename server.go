@@ -276,7 +276,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc(s.config.Path, s.handleWebSocket)
 
 	var handler http.Handler = mux
-	// TODO: apply in chain middlewares
+	handler = s.handler.ApplyMiddlewares(handler)
 
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", s.config.Port),
@@ -339,7 +339,7 @@ func (s *Server) StartWithContext(ctx context.Context) error {
 	mux.HandleFunc(s.config.Path, s.handleWebSocket)
 
 	var handler http.Handler = mux
-	// TODO: apply in chain middlewares
+	handler = s.handler.ApplyMiddlewares(handler)
 
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", s.config.Port),
