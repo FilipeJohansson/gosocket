@@ -78,6 +78,7 @@ type Server struct {
 	mu        sync.RWMutex
 }
 
+// NewServer returns a new Server instance with default configuration.
 func NewServer() *Server {
 	return &Server{
 		handler: NewHandler(),
@@ -88,6 +89,8 @@ func NewServer() *Server {
 
 // ===== Fluent Interface =====
 
+// WithPort sets the port number for the server to listen on. If the port is outside the valid range
+// of 1-65535, a warning is printed to the console and the default port of 8080 is used instead.
 func (s *Server) WithPort(port int) *Server {
 	if s.config == nil {
 		s.config = DefaultServerConfig()
@@ -102,6 +105,7 @@ func (s *Server) WithPort(port int) *Server {
 	return s
 }
 
+// WithPath sets the path for the server to listen on. If the path is empty, it defaults to "/". If the path does not start with a slash, it is prepended with one.
 func (s *Server) WithPath(path string) *Server {
 	if s.config == nil {
 		s.config = DefaultServerConfig()
@@ -119,6 +123,11 @@ func (s *Server) WithPath(path string) *Server {
 	return s
 }
 
+// WithCORS sets whether the server should enable Cross-Origin Resource Sharing (CORS) for
+// incoming requests. If enabled, the server will include the Access-Control-Allow-Origin
+// header in all responses. Note that this is a simple implementation and does not handle
+// preflighted requests or other advanced CORS features. See https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS
+// for more information.
 func (s *Server) WithCORS(enabled bool) *Server {
 	if s.config == nil {
 		s.config = DefaultServerConfig()
@@ -127,6 +136,10 @@ func (s *Server) WithCORS(enabled bool) *Server {
 	return s
 }
 
+// WithSSL enables SSL/TLS for the server. The server will only serve requests
+// over HTTPS if this method is called with a valid certificate and key file.
+// If either the certificate or key file is empty, SSL/TLS will not be enabled.
+// The certificate and key file should be in PEM format.
 func (s *Server) WithSSL(certFile, keyFile string) *Server {
 	if s.config == nil {
 		s.config = DefaultServerConfig()
@@ -143,58 +156,92 @@ func (s *Server) WithSSL(certFile, keyFile string) *Server {
 	return s
 }
 
+// WithMaxConnections sets the maximum number of connections the server should accept.
+// If max <= 0, it is set to the default of 1000.
 func (s *Server) WithMaxConnections(max int) *Server {
 	s.handler.WithMaxConnections(max)
 	return s
 }
 
+// WithMessageSize sets the maximum message size for the server. If the size is less than or equal to 0, the default of 1024 is used.
 func (s *Server) WithMessageSize(size int64) *Server {
 	s.handler.WithMessageSize(size)
 	return s
 }
 
+// WithTimeout sets the read and write timeouts for the server. If read is negative or write is negative,
+// the timeouts are set to 0.
 func (s *Server) WithTimeout(read, write time.Duration) *Server {
 	s.handler.WithTimeout(read, write)
 	return s
 }
 
+// WithPingPong sets the ping and pong wait periods for the server. If pingPeriod or pongWait are negative,
+// the timeouts are set to 0.
 func (s *Server) WithPingPong(pingPeriod, pongWait time.Duration) *Server {
 	s.handler.WithPingPong(pingPeriod, pongWait)
 	return s
 }
 
+// WithAllowedOrigins sets the allowed origins for the server. If the slice is empty,
+// the server will allow any origin. Otherwise, the server will only allow the specified
+// origins in the Origin header of incoming requests.
 func (s *Server) WithAllowedOrigins(origins []string) *Server {
 	s.handler.WithAllowedOrigins(origins)
 	return s
 }
 
+// WithEncoding sets the default encoding for the server. This encoding will be used
+// to encode messages sent to clients if no encoding is specified. If the encoding
+// is not supported, the server will not start.
 func (s *Server) WithEncoding(encoding EncodingType) *Server {
 	s.handler.WithEncoding(encoding)
 	return s
 }
 
+// WithSerializer sets the serializer for the server to use with the given encoding.
+// If the serializer is nil, the server will not use this encoding.
+// The server will use the default encoding if no encoding is specified.
 func (s *Server) WithSerializer(encoding EncodingType, serializer Serializer) *Server {
 	s.handler.WithSerializer(encoding, serializer)
 	return s
 }
 
+// WithJSONSerializer sets the JSON serializer for the server. This serializer
+// is used to encode and decode messages sent to and from clients. If the
+// serializer is nil, the server will not use this encoding.
 func (s *Server) WithJSONSerializer() *Server {
 	return s.WithSerializer(JSON, JSONSerializer{})
 }
 
+// WithProtobufSerializer sets the Protobuf serializer for the server. This serializer
+// is used to encode and decode messages sent to and from clients. If the
+// serializer is nil, the server will not use this encoding.
 func (s *Server) WithProtobufSerializer() *Server {
 	return s.WithSerializer(Protobuf, ProtobufSerializer{})
 }
 
+// WithRawSerializer sets the Raw serializer for the server. This serializer
+// is used to encode and decode messages sent to and from clients. If the
+// serializer is nil, the server will not use this encoding.
 func (s *Server) WithRawSerializer() *Server {
 	return s.WithSerializer(Raw, RawSerializer{})
 }
 
+// WithMiddleware adds a middleware to the server. Middleware functions are executed
+// before the OnConnect, OnMessage, and OnDisconnect handlers. They can be used to
+// add authentication, logging, CORS support, or any other functionality that
+// is needed.
 func (s *Server) WithMiddleware(middleware Middleware) *Server {
 	s.handler.WithMiddleware(middleware)
 	return s
 }
 
+// WithAuth sets the authentication function for the server. The authentication
+// function is called for each new connection to the server. It should return a
+// map of user data and an error. If the error is not nil, the connection is
+// closed. The user data is stored in the client's User field and can be accessed
+// using the client.User() method.
 func (s *Server) WithAuth(authFunc AuthFunc) *Server {
 	s.handler.WithAuth(authFunc)
 	return s
@@ -202,46 +249,84 @@ func (s *Server) WithAuth(authFunc AuthFunc) *Server {
 
 // ===== HANDLERS =====
 
+// OnConnect sets the OnConnect handler for the server. This handler is called when
+// a new client connects to the server. The handler should return an error if the
+// connection should be closed. The handler is called after the authentication
+// function has been called and the client has been added to the server's list of
+// clients.
 func (s *Server) OnConnect(handler func(*Client) error) *Server {
 	s.handler.OnConnect(handler)
 	return s
 }
 
+// OnDisconnect sets the OnDisconnect handler for the server. This handler is
+// called when a client disconnects from the server. The handler should return an
+// error if the disconnection should be treated as an error. The handler is called
+// after the client has been removed from the server's list of clients.
 func (s *Server) OnDisconnect(handler func(*Client) error) *Server {
 	s.handler.OnDisconnect(handler)
 	return s
 }
 
+// OnMessage sets the OnMessage handler for the server. This handler is called when
+// a new message is received from a client. The handler should return an error if
+// the message should be treated as an error. The handler is called after the
+// message has been decoded and deserialized.
 func (s *Server) OnMessage(handler func(*Client, *Message) error) *Server {
 	s.handler.OnMessage(handler)
 	return s
 }
 
+// OnRawMessage sets the OnRawMessage handler for the server. This handler is called
+// when a new message is received from a client. The handler should return an error
+// if the message should be treated as an error. The handler is called after the
+// message has been decoded, but before it has been deserialized.
 func (s *Server) OnRawMessage(handler func(*Client, []byte) error) *Server {
 	s.handler.OnRawMessage(handler)
 	return s
 }
 
+// OnJSONMessage sets the OnJSONMessage handler for the server. This handler is
+// called when a new JSON message is received from a client. The handler should
+// return an error if the message should be treated as an error. The handler is
+// called after the message has been decoded and parsed as JSON.
 func (s *Server) OnJSONMessage(handler func(*Client, interface{}) error) *Server {
 	s.handler.OnJSONMessage(handler)
 	return s
 }
 
+// OnProtobufMessage sets the OnProtobufMessage handler for the server. This
+// handler is called when a new Protobuf message is received from a client. The
+// handler should return an error if the message should be treated as an error.
+// The handler is called after the message has been decoded and parsed as
+// Protobuf.
 func (s *Server) OnProtobufMessage(handler func(*Client, interface{}) error) *Server {
 	s.handler.OnProtobufMessage(handler)
 	return s
 }
 
+// OnError sets the OnError handler for the server. This handler is called when an
+// error occurs. The handler should return an error if the error should be
+// treated as an error. The handler is called with the client that caused the
+// error and the error itself. The handler is called after the error has been
+// logged.
 func (s *Server) OnError(handler func(*Client, error) error) *Server {
 	s.handler.OnError(handler)
 	return s
 }
 
+// OnPing sets the OnPing handler for the server. This handler is called when a
+// ping message is sent by a client. The handler should return an error if the
+// ping should be treated as an error. The handler is called with the client that
+// sent the ping.
 func (s *Server) OnPing(handler func(*Client) error) *Server {
 	s.handler.OnPing(handler)
 	return s
 }
 
+// OnPong sets the OnPong handler for the server. This handler is called when a pong message is sent by a client.
+// The handler should return an error if the pong should be treated as an error. The handler is called with the client that
+// sent the pong.
 func (s *Server) OnPong(handler func(*Client) error) *Server {
 	s.handler.OnPong(handler)
 	return s
@@ -249,6 +334,15 @@ func (s *Server) OnPong(handler func(*Client) error) *Server {
 
 // ===== CONTROLLERS =====
 
+// Start starts the GoSocket server. It will start listening on the configured
+// port and path, and will begin accepting connections. If the server is already
+// running, this function will return an error. If the port is invalid, this
+// function will return an error. If the path is empty, this function will use the
+// default path of "/ws". If there are no serializers configured, this function
+// will use the JSON serializer by default. The server will be stopped using the
+// Stop function, or by calling the Close method on the underlying net.Listener.
+// If the server is stopped, this function will return an error. If the server
+// encounters an error, this function will return an error.
 func (s *Server) Start() error {
 	s.mu.Lock()
 	if s.isRunning {
@@ -317,6 +411,14 @@ func (s *Server) Start() error {
 	return nil
 }
 
+// StartWithContext starts the GoSocket server and returns an error. It will start listening on the configured
+// port and path, and will begin accepting connections. If the server is already running, this function will
+// return an error. If the port is invalid, this function will return an error. If the path is empty, this
+// function will use the default path of "/ws". If there are no serializers configured, this function will use
+// the JSON serializer by default. The server will be stopped using the Stop function, or by calling the Close
+// method on the underlying net.Listener. If the server is stopped, this function will return an error. If the
+// server encounters an error, this function will return an error. This function will also return an error if the
+// provided context is canceled.
 func (s *Server) StartWithContext(ctx context.Context) error {
 	s.mu.Lock()
 	if s.isRunning {
@@ -406,6 +508,10 @@ func (s *Server) StartWithContext(ctx context.Context) error {
 	}
 }
 
+// Stop stops the GoSocket server and closes all active connections. This function will block until all active
+// connections have been closed. If the server is not running, this function will return an error. If the server
+// encounters an error while stopping, this function will return an error. This function will also return an error
+// if the server's underlying net.Listener cannot be closed.
 func (s *Server) Stop() error {
 	s.mu.RLock()
 	if !s.isRunning || s.server == nil {
@@ -425,6 +531,10 @@ func (s *Server) Stop() error {
 	return s.server.Close()
 }
 
+// StopGracefully stops the GoSocket server and closes all active connections gracefully. This function will block until the context
+// times out or all active connections have been closed. If the server is not running, this function will return an error. If the server
+// encounters an error while stopping, this function will return an error. This function will also return an error if the server's
+// underlying net.Listener cannot be closed.
 func (s *Server) StopGracefully(timeout time.Duration) error {
 	s.mu.RLock()
 	if !s.isRunning || s.server == nil {
@@ -449,6 +559,9 @@ func (s *Server) StopGracefully(timeout time.Duration) error {
 
 // ===== BROADCASTING =====
 
+// Broadcast sends a raw message to all connected clients. The message is sent as a
+// websocket.TextMessage. If the server is not properly initialized, this function
+// will return an error.
 func (s *Server) Broadcast(message []byte) error {
 	if s.handler == nil || s.handler.hub == nil {
 		return fmt.Errorf("server not properly initialized")
@@ -460,6 +573,9 @@ func (s *Server) Broadcast(message []byte) error {
 	return nil
 }
 
+// BroadcastMessage sends a Message to all connected clients. The message will be sent
+// to each client according to the client's EncodingType. If the server is not properly
+// initialized, this function will return an error.
 func (s *Server) BroadcastMessage(message *Message) error {
 	if s.handler == nil || s.handler.hub == nil {
 		return fmt.Errorf("server not properly initialized")
@@ -469,6 +585,11 @@ func (s *Server) BroadcastMessage(message *Message) error {
 	return nil
 }
 
+// BroadcastData sends the given data to all connected clients. The data is serialized
+// using the server's default encoding. If the default encoding is not set, the data
+// will be sent as JSON. The data is sent as a websocket.TextMessage. If the server
+// is not properly initialized, this function will return an error. If serialization
+// fails, this function will return an error.
 func (s *Server) BroadcastData(data interface{}) error {
 	serializer := s.handler.serializers[s.handler.config.DefaultEncoding]
 	if serializer == nil {
@@ -484,6 +605,11 @@ func (s *Server) BroadcastData(data interface{}) error {
 	return s.Broadcast(rawData)
 }
 
+// BroadcastDataWithEncoding sends the given data to all connected clients using the
+// specified encoding type. The data is serialized using the matching serializer. If
+// the serializer is not found, an error is returned. If serialization fails, an
+// error is returned. The data is sent as a websocket.BinaryMessage. If the server
+// is not properly initialized, this function will return an error.
 func (s *Server) BroadcastDataWithEncoding(data interface{}, encoding EncodingType) error {
 	serializer := s.handler.serializers[encoding]
 	if serializer == nil {
@@ -498,6 +624,10 @@ func (s *Server) BroadcastDataWithEncoding(data interface{}, encoding EncodingTy
 	return s.Broadcast(rawData)
 }
 
+// BroadcastJSON sends the given data to all connected clients as JSON. The data is
+// marshaled to JSON and sent as a websocket.TextMessage. If the marshaling fails,
+// an error is returned. If the server is not properly initialized, this function
+// will return an error.
 func (s *Server) BroadcastJSON(data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -507,10 +637,17 @@ func (s *Server) BroadcastJSON(data interface{}) error {
 	return s.Broadcast(jsonData)
 }
 
+// BroadcastProtobuf sends the given data to all connected clients as Protobuf. The data is
+// marshaled to Protobuf and sent as a websocket.BinaryMessage. If the marshaling fails,
+// an error is returned. If the server is not properly initialized, this function
+// will return an error.
 func (s *Server) BroadcastProtobuf(data interface{}) error {
 	return nil
 }
 
+// BroadcastToRoom sends the given message to all clients in the specified room. The message
+// is sent as a websocket.TextMessage. If the server is not properly initialized, this
+// function will return an error.
 func (s *Server) BroadcastToRoom(room string, message []byte) error {
 	if s.handler == nil || s.handler.hub == nil {
 		return fmt.Errorf("server not properly initialized")
@@ -523,6 +660,11 @@ func (s *Server) BroadcastToRoom(room string, message []byte) error {
 	return nil
 }
 
+// BroadcastToRoomData sends the given data to all clients in the specified room. The data
+// is serialized using the server's default encoding. If the default encoding is not set,
+// the data will be sent as JSON. The data is sent as a websocket.TextMessage. If the server
+// is not properly initialized, this function will return an error. If serialization fails,
+// this function will return an error.
 func (s *Server) BroadcastToRoomData(room string, data interface{}) error {
 	serializer := s.handler.serializers[s.handler.config.DefaultEncoding]
 	if serializer == nil {
@@ -537,6 +679,10 @@ func (s *Server) BroadcastToRoomData(room string, data interface{}) error {
 	return s.BroadcastToRoom(room, rawData)
 }
 
+// BroadcastToRoomJSON sends the given data to all clients in the specified room as JSON.
+// The data is marshaled to JSON and sent as a websocket.TextMessage. If the marshaling
+// fails, an error is returned. If the server is not properly initialized, this function
+// will return an error.
 func (s *Server) BroadcastToRoomJSON(room string, data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -546,12 +692,17 @@ func (s *Server) BroadcastToRoomJSON(room string, data interface{}) error {
 	return s.BroadcastToRoom(room, jsonData)
 }
 
+// BroadcastToRoomProtobuf sends the given data to all clients in the specified room as Protobuf. The data
+// is marshaled to Protobuf and sent as a websocket.BinaryMessage. If the marshaling fails, an error is
+// returned. If the server is not properly initialized, this function will return an error.
 func (s *Server) BroadcastToRoomProtobuf(room string, data interface{}) error {
 	return nil
 }
 
 // ===== CLIENT MANAGEMENT =====
 
+// GetClients returns all clients currently connected to the server. If the server is not properly
+// initialized, an empty slice is returned.
 func (s *Server) GetClients() []*Client {
 	if s.handler == nil || s.handler.hub == nil {
 		return []*Client{}
@@ -566,6 +717,8 @@ func (s *Server) GetClients() []*Client {
 	return clients
 }
 
+// GetClient returns a client by its ID. If no client with the given ID exists,
+// nil is returned. This method is safe to call concurrently.
 func (s *Server) GetClient(id string) *Client {
 	clients := s.GetClients()
 	for _, client := range clients {
@@ -576,6 +729,9 @@ func (s *Server) GetClient(id string) *Client {
 	return nil
 }
 
+// GetClientsInRoom returns all clients in the specified room. If the server is not properly
+// initialized or the room does not exist, an empty slice is returned. This method is safe to call
+// concurrently.
 func (s *Server) GetClientsInRoom(room string) []*Client {
 	if s.handler == nil || s.handler.hub == nil {
 		return []*Client{}
@@ -584,6 +740,8 @@ func (s *Server) GetClientsInRoom(room string) []*Client {
 	return s.handler.hub.GetRoomClients(room)
 }
 
+// GetClientCount returns the number of clients currently connected to the server. If the server is not properly
+// initialized, 0 is returned. This method is safe to call concurrently.
 func (s *Server) GetClientCount() int {
 	if s.handler == nil || s.handler.hub == nil {
 		return 0
@@ -592,6 +750,11 @@ func (s *Server) GetClientCount() int {
 	return len(s.handler.hub.GetClients())
 }
 
+// DisconnectClient removes the client with the specified ID from its hub and closes its connection. It will
+// return nil if the client is not connected to a hub or if the connection is nil. Otherwise, it will return
+// the error from closing the connection. If the client is not found, an error is returned.
+//
+// This method is safe to call concurrently.
 func (s *Server) DisconnectClient(id string) error {
 	client := s.GetClient(id)
 	if client == nil {
@@ -603,6 +766,10 @@ func (s *Server) DisconnectClient(id string) error {
 
 // ===== ROOM MANAGEMENT =====
 
+// CreateRoom creates a new room with the given name. If the room already exists, the method
+// will return nil. If the server is not properly initialized, an error is returned.
+//
+// Thismethod is safe to call concurrently.
 func (s *Server) CreateRoom(name string) error {
 	if s.handler == nil || s.handler.hub == nil {
 		return fmt.Errorf("server not properly initialized")
@@ -611,6 +778,10 @@ func (s *Server) CreateRoom(name string) error {
 	return s.handler.hub.CreateRoom(name)
 }
 
+// DeleteRoom deletes a room with the given name. If the room does not exist, it will return
+// an error. If the server is not properly initialized, an error is returned.
+//
+// This method is safe to call concurrently.
 func (s *Server) DeleteRoom(name string) error {
 	if s.handler == nil || s.handler.hub == nil {
 		return fmt.Errorf("server not properly initialized")
@@ -619,6 +790,10 @@ func (s *Server) DeleteRoom(name string) error {
 	return s.handler.hub.DeleteRoom(name)
 }
 
+// GetRooms returns all rooms currently on the server. If the server is not properly
+// initialized, an empty slice is returned.
+//
+// This method is safe to call concurrently.
 func (s *Server) GetRooms() []string {
 	if s.handler == nil || s.handler.hub == nil {
 		return []string{}
@@ -633,6 +808,10 @@ func (s *Server) GetRooms() []string {
 	return rooms
 }
 
+// JoinRoom joins the given client to the given room. It will return an error if the client does not exist.
+// If the client exists, it will call the JoinRoom method on the client.
+//
+// This method is safe to call concurrently.
 func (s *Server) JoinRoom(clientID, room string) error {
 	client := s.GetClient(clientID)
 	if client == nil {
@@ -642,6 +821,9 @@ func (s *Server) JoinRoom(clientID, room string) error {
 	return client.JoinRoom(room)
 }
 
+// LeaveRoom removes the given client from the given room. It will return an error if the client does not exist.
+//
+// This method is safe to call concurrently.
 func (s *Server) LeaveRoom(clientID, room string) error {
 	client := s.GetClient(clientID)
 	if client == nil {
@@ -651,6 +833,11 @@ func (s *Server) LeaveRoom(clientID, room string) error {
 	return client.LeaveRoom(room)
 }
 
+// handleWebSocket is the HTTP handler that is registered for the WebSocket endpoint. It upgrades the connection to a WebSocket connection,
+// authenticates the user using the authFunc, and then adds the client to the hub and starts the client's read and write goroutines.
+// It also calls the OnConnect handler if it is set.
+//
+// This method is safe to call concurrently.
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -715,6 +902,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	go s.handleClientRead(client)
 }
 
+// handleClientWrite is a goroutine that writes messages to a client. It reads
+// from the client's MessageChan and writes to the client's websocket connection.
+// If the MessageChan is closed, it sends a CloseMessage to the client and
+// returns. It also sends a PingMessage every s.handler.config.PingPeriod to the
+// client. If the client's websocket connection is closed or an error occurs when
+// writing to the client, it calls s.handler.handlers.OnError if it is not nil.
 func (s *Server) handleClientWrite(client *Client) {
 	ticker := time.NewTicker(s.handler.config.PingPeriod)
 	defer func() {
@@ -753,6 +946,11 @@ func (s *Server) handleClientWrite(client *Client) {
 	}
 }
 
+// handleClientRead is a goroutine that reads messages from a client. It reads
+// from the client's websocket connection and processes the messages. If the
+// client's websocket connection is closed or an error occurs when reading from
+// the client, it calls s.handler.handlers.OnError if it is not nil and
+// s.handler.handlers.OnDisconnect when the client is done.
 func (s *Server) handleClientRead(client *Client) {
 	defer func() {
 		s.handler.hub.RemoveClient(client)
@@ -789,6 +987,14 @@ func (s *Server) handleClientRead(client *Client) {
 	}
 }
 
+// processMessage is a helper function that processes a message from a client.
+// It first calls the OnMessage handler if it is not nil. If the OnMessage handler
+// returns an error, it calls the OnError handler if it is not nil. Then, it
+// calls the OnRawMessage handler if it is not nil. If the OnRawMessage handler
+// returns an error, it calls the OnError handler if it is not nil. Finally, it
+// calls the OnJSONMessage handler if it is not nil, unmarshals the message data
+// to JSON, and passes the unmarshaled data to the handler. If the OnJSONMessage
+// handler returns an error, it calls the OnError handler if it is not nil.
 func (s *Server) processMessage(client *Client, message *Message) {
 	if s.handler.handlers.OnMessage != nil {
 		if err := s.handler.handlers.OnMessage(client, message); err != nil {

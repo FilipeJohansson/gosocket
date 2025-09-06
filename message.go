@@ -24,6 +24,12 @@ const (
 	CloseMessage
 )
 
+// NewMessage creates a new Message with the given MessageType and data.
+//
+// The data must be a valid JSON structure, and will be serialized to a byte slice.
+// If the data is not a valid JSON structure, an error will be returned.
+//
+// The Encoding field of the Message will be set to JSON.
 func NewMessage(msgType MessageType, data interface{}) *Message {
 	return &Message{
 		Type:    msgType,
@@ -32,6 +38,12 @@ func NewMessage(msgType MessageType, data interface{}) *Message {
 	}
 }
 
+// NewMessageWithEncoding creates a new Message with the given MessageType, data, and Encoding type.
+//
+// The data must be a valid JSON structure, and will be serialized to a byte slice.
+// If the data is not a valid JSON structure, an error will be returned.
+//
+// The Encoding field of the Message will be set to the provided Encoding type.
 func NewMessageWithEncoding(msgType MessageType, data interface{}, encoding EncodingType) *Message {
 	return &Message{
 		Type:     msgType,
@@ -41,6 +53,10 @@ func NewMessageWithEncoding(msgType MessageType, data interface{}, encoding Enco
 	}
 }
 
+// NewRawMessage creates a new Message with the given MessageType and raw data.
+//
+// The RawData field of the Message will be set to the provided raw data.
+// The Encoding field of the Message will be set to Raw.
 func NewRawMessage(msgType MessageType, rawData []byte) *Message {
 	return &Message{
 		Type:     msgType,

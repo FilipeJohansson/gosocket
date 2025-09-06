@@ -5,10 +5,28 @@ import (
 	"fmt"
 )
 
+// Serializer defines an interface for serializing and deserializing data.
 type Serializer interface {
+	// Marshal converts a Go value into a byte slice representation.
+	//
+	// The provided value is marshaled into a byte slice, which can be written to a stream or stored in a buffer.
+	// Any error that occurs during marshaling is returned.
 	Marshal(v interface{}) ([]byte, error)
+
+	// Unmarshal converts a byte slice into a Go value.
+	//
+	// The provided byte slice is unmarshaled into the provided value.
+	// Any error that occurs during unmarshaling is returned.
 	Unmarshal(data []byte, v interface{}) error
+
+	// ContentType returns the content type associated with the serialized data.
+	//
+	// The returned content type is a string that identifies the format of the serialized data.
 	ContentType() string
+
+	// EncodingType returns the type of encoding used by the serializer.
+	//
+	// The returned encoding type is an EncodingType value that identifies the encoding scheme used by the serializer.
 	EncodingType() EncodingType
 }
 

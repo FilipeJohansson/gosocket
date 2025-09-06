@@ -35,6 +35,10 @@ type Handler struct {
 	mu          sync.RWMutex
 }
 
+// NewHandler returns a new instance of Handler with default configuration.
+// The default configuration is to accept up to 1000 connections and to set the
+// read and write buffers to 1024 bytes. The default encoding is JSON, but you can
+// change it by calling the WithEncoding method.
 func NewHandler() *Handler {
 	return &Handler{
 		hub:         NewHub(),
@@ -51,6 +55,8 @@ func NewHandler() *Handler {
 
 // ===== Fluent Interface =====
 
+// WithMaxConnections sets the maximum number of connections the server should accept.
+// If max <= 0, it is set to the default of 1000.
 func (h *Handler) WithMaxConnections(max int) *Handler {
 	if max <= 0 {
 		fmt.Println("Warning: max connections must be greater than 0, setting to default 1000")
@@ -61,6 +67,7 @@ func (h *Handler) WithMaxConnections(max int) *Handler {
 	return h
 }
 
+// WithMessageSize sets the maximum message size for the server. If the size is less than or equal to 0, the default of 1024 is used.
 func (h *Handler) WithMessageSize(size int64) *Handler {
 	if size <= 0 {
 		fmt.Println("Warning: message size must be greater than 0, setting to default 1024")
@@ -71,6 +78,8 @@ func (h *Handler) WithMessageSize(size int64) *Handler {
 	return h
 }
 
+// WithTimeout sets the read and write timeouts for the server. If read is negative or write is negative,
+// the timeouts are set to 0.
 func (h *Handler) WithTimeout(read, write time.Duration) *Handler {
 	if read < 0 || write < 0 {
 		fmt.Println("Warning: timeouts must be non-negative, setting to default 0")
@@ -83,6 +92,8 @@ func (h *Handler) WithTimeout(read, write time.Duration) *Handler {
 	return h
 }
 
+// WithPingPong sets the ping and pong wait periods for the server. If pingPeriod or pongWait are
+// negative, the timeouts are set to 0.
 func (h *Handler) WithPingPong(pingPeriod, pongWait time.Duration) *Handler {
 	if pingPeriod <= 0 || pongWait <= 0 {
 		fmt.Println("Warning: ping period and pong wait must be greater than 0, setting to default 0")
@@ -95,16 +106,25 @@ func (h *Handler) WithPingPong(pingPeriod, pongWait time.Duration) *Handler {
 	return h
 }
 
+// WithAllowedOrigins sets the allowed origins for the server. If the slice is empty,
+// the server will allow any origin. Otherwise, the server will only allow the specified
+// origins in the Origin header of incoming requests.
 func (h *Handler) WithAllowedOrigins(origins []string) *Handler {
 	h.config.AllowedOrigins = origins
 	return h
 }
 
+// WithEncoding sets the default encoding for the server. This encoding will be used
+// to encode messages sent to clients if no encoding is specified. If the encoding
+// is not supported, the server will not start.
 func (h *Handler) WithEncoding(encoding EncodingType) *Handler {
 	h.config.DefaultEncoding = encoding
 	return h
 }
 
+// WithSerializer sets the serializer for the server to use with the given encoding.
+// If the serializer is nil, the server will not use this encoding.
+// The server will use the default encoding if no encoding is specified.
 func (h *Handler) WithSerializer(encoding EncodingType, serializer Serializer) *Handler {
 	if h.serializers == nil {
 		h.serializers = make(map[EncodingType]Serializer)
@@ -113,18 +133,31 @@ func (h *Handler) WithSerializer(encoding EncodingType, serializer Serializer) *
 	return h
 }
 
+// WithJSONSerializer sets the JSON serializer for the server. This serializer
+// is used to encode and decode messages sent to and from clients. If the
+// serializer is nil, the server will not use this encoding.
 func (h *Handler) WithJSONSerializer() *Handler {
 	return h.WithSerializer(JSON, JSONSerializer{})
 }
 
+// WithProtobufSerializer sets the Protobuf serializer for the server. This serializer
+// is used to encode and decode messages sent to and from clients. If the
+// serializer is nil, the server will not use this encoding.
 func (h *Handler) WithProtobufSerializer() *Handler {
 	return h.WithSerializer(Protobuf, ProtobufSerializer{})
 }
 
+// WithRawSerializer sets the Raw serializer for the server. This serializer
+// is used to encode and decode messages sent to and from clients. If the
+// serializer is nil, the server will not use this encoding.
 func (h *Handler) WithRawSerializer() *Handler {
 	return h.WithSerializer(Raw, RawSerializer{})
 }
 
+// WithMiddleware adds a middleware to the handler. Middleware functions are executed
+// before the OnConnect, OnMessage, and OnDisconnect handlers. They can be used to
+// add authentication, logging, CORS support, or any other functionality that
+// is needed.
 func (h *Handler) WithMiddleware(middleware Middleware) *Handler {
 	if h.middlewares == nil {
 		h.middlewares = make([]Middleware, 0)
@@ -133,6 +166,11 @@ func (h *Handler) WithMiddleware(middleware Middleware) *Handler {
 	return h
 }
 
+// WithAuth sets the authentication function for the server. The authentication
+// function is called for each new connection to the server. It should return a
+// map of user data and an error. If the error is not nil, the connection is
+// closed. The user data is stored in the client's User field and can be accessed
+// using the client.User() method.
 func (h *Handler) WithAuth(authFunc AuthFunc) *Handler {
 	h.authFunc = authFunc
 	return h
@@ -140,6 +178,11 @@ func (h *Handler) WithAuth(authFunc AuthFunc) *Handler {
 
 // ===== HANDLERS =====
 
+// OnConnect sets the OnConnect handler for the server. This handler is
+// called when a new client connects to the server. The handler should return an
+// error if the connection should be closed. The handler is called after the
+// authentication function has been called and the client has been added to the
+// server's list of clients.
 func (h *Handler) OnConnect(handler func(*Client) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
@@ -148,6 +191,10 @@ func (h *Handler) OnConnect(handler func(*Client) error) *Handler {
 	return h
 }
 
+// OnDisconnect sets the OnDisconnect handler for the server. This handler is
+// called when a client disconnects from the server. The handler should return an
+// error if the disconnection should be treated as an error. The handler is called
+// after the client has been removed from the server's list of clients.
 func (h *Handler) OnDisconnect(handler func(*Client) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
@@ -156,6 +203,10 @@ func (h *Handler) OnDisconnect(handler func(*Client) error) *Handler {
 	return h
 }
 
+// OnMessage sets the OnMessage handler for the server. This handler is called when
+// a new message is received from a client. The handler should return an error if
+// the message should be treated as an error. The handler is called after the
+// message has been decoded and deserialized.
 func (h *Handler) OnMessage(handler func(*Client, *Message) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
@@ -164,6 +215,10 @@ func (h *Handler) OnMessage(handler func(*Client, *Message) error) *Handler {
 	return h
 }
 
+// OnRawMessage sets the OnRawMessage handler for the server. This handler is
+// called when a new raw message is received from a client. The handler should
+// return an error if the message should be treated as an error. The handler is
+// called after the message has been decoded, but before it has been deserialized.
 func (h *Handler) OnRawMessage(handler func(*Client, []byte) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
@@ -172,6 +227,10 @@ func (h *Handler) OnRawMessage(handler func(*Client, []byte) error) *Handler {
 	return h
 }
 
+// OnJSONMessage sets the OnJSONMessage handler for the server. This handler is
+// called when a new JSON message is received from a client. The handler should
+// return an error if the message should be treated as an error. The handler is
+// called after the message has been decoded and parsed as JSON.
 func (h *Handler) OnJSONMessage(handler func(*Client, interface{}) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
@@ -180,6 +239,10 @@ func (h *Handler) OnJSONMessage(handler func(*Client, interface{}) error) *Handl
 	return h
 }
 
+// OnProtobufMessage sets the OnProtobufMessage handler for the server. This handler
+// is called when a new Protobuf message is received from a client. The handler
+// should return an error if the message should be treated as an error. The handler
+// is called after the message has been decoded and parsed as Protobuf.
 func (h *Handler) OnProtobufMessage(handler func(*Client, interface{}) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
@@ -188,6 +251,11 @@ func (h *Handler) OnProtobufMessage(handler func(*Client, interface{}) error) *H
 	return h
 }
 
+// OnError sets the OnError handler for the server. This handler is
+// called when an error occurs. The handler should return an error if the
+// error should be treated as an error. The handler is called with the
+// client that caused the error and the error itself. The handler is called
+// after the error has been logged.
 func (h *Handler) OnError(handler func(*Client, error) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
@@ -196,6 +264,10 @@ func (h *Handler) OnError(handler func(*Client, error) error) *Handler {
 	return h
 }
 
+// OnPing sets the OnPing handler for the server. This handler is
+// called when a ping message is sent by a client. The handler should
+// return an error if the ping should be treated as an error. The handler
+// is called with the client that sent the ping.
 func (h *Handler) OnPing(handler func(*Client) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
@@ -204,6 +276,10 @@ func (h *Handler) OnPing(handler func(*Client) error) *Handler {
 	return h
 }
 
+// OnPong sets the OnPong handler for the server. This handler is called when a
+// pong message is sent by a client. The handler should return an error if the
+// pong should be treated as an error. The handler is called with the client that
+// sent the pong.
 func (h *Handler) OnPong(handler func(*Client) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
@@ -214,6 +290,11 @@ func (h *Handler) OnPong(handler func(*Client) error) *Handler {
 
 // ===== CONTROLLERS =====
 
+// ServeHTTP implements the http.Handler interface.
+// It is the entrypoint for handling all WebSocket requests.
+// It first ensures that the hub is running, and then applies
+// all configured middlewares to the request. Finally, it calls
+// the configured WebSocket handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.ensureHubRunning()
 
@@ -231,6 +312,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ApplyMiddlewares applies all configured middlewares to the given handler.
+// The middlewares are applied in reverse order of how they were added to the
+// handler. If no middlewares are configured, the original handler is returned.
 func (h *Handler) ApplyMiddlewares(handler http.Handler) http.Handler {
 	if len(h.middlewares) == 0 {
 		return handler
@@ -244,6 +328,11 @@ func (h *Handler) ApplyMiddlewares(handler http.Handler) http.Handler {
 	return finalHandler
 }
 
+// handleWebSocket is the HTTP handler that is registered for the WebSocket endpoint. It upgrades the connection to a WebSocket connection,
+// authenticates the user using the authFunc, and then adds the client to the hub and starts the client's read and write goroutines.
+// It also calls the OnConnect handler if it is set.
+//
+// This method is safe to call concurrently.
 func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if h.upgrader.CheckOrigin == nil {
 		h.upgrader.CheckOrigin = func(r *http.Request) bool {
@@ -306,6 +395,12 @@ func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	go h.handleClientRead(client)
 }
 
+// handleClientWrite is a goroutine that writes messages to a client. It reads
+// from the client's MessageChan and writes to the client's websocket connection.
+// If the MessageChan is closed, it sends a CloseMessage to the client and
+// returns. It also sends a PingMessage every h.config.PingPeriod to the
+// client. If the client's websocket connection is closed or an error occurs when
+// writing to the client, it calls h.handlers.OnError if it is not nil.
 func (h *Handler) handleClientWrite(client *Client) {
 	ticker := time.NewTicker(h.config.PingPeriod)
 	defer func() {
@@ -344,6 +439,11 @@ func (h *Handler) handleClientWrite(client *Client) {
 	}
 }
 
+// handleClientRead is a goroutine that reads messages from a client. It reads
+// from the client's websocket connection and processes the messages. If the
+// client's websocket connection is closed or an error occurs when reading from
+// the client, it calls h.handlers.OnError if it is not nil and
+// h.handlers.OnDisconnect when the client is done.
 func (h *Handler) handleClientRead(client *Client) {
 	defer func() {
 		h.hub.RemoveClient(client)
@@ -380,6 +480,14 @@ func (h *Handler) handleClientRead(client *Client) {
 	}
 }
 
+// processMessage is a helper function that processes a message from a client.
+// It first calls the OnMessage handler if it is not nil. If the OnMessage handler
+// returns an error, it calls the OnError handler if it is not nil. Then, it
+// calls the OnRawMessage handler if it is not nil. If the OnRawMessage handler
+// returns an error, it calls the OnError handler if it is not nil. Finally, it
+// calls the OnJSONMessage handler if it is not nil, unmarshals the message data
+// to JSON, and passes the unmarshaled data to the handler. If the OnJSONMessage
+// handler returns an error, it calls the OnError handler if it is not nil.
 func (h *Handler) processMessage(client *Client, message *Message) {
 	if h.handlers.OnMessage != nil {
 		if err := h.handlers.OnMessage(client, message); err != nil {
@@ -412,6 +520,8 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 	// TODO: add Protobuf and other formats
 }
 
+// ensureHubRunning starts the hub if it is not already running.
+// It is safe to call concurrently.
 func (h *Handler) ensureHubRunning() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
