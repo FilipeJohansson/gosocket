@@ -557,11 +557,9 @@ func (s *Server) GetClients() []*Client {
 		return []*Client{}
 	}
 
-	s.handler.hub.mu.RLock()
-	defer s.handler.hub.mu.RUnlock()
-
-	clients := make([]*Client, 0, len(s.handler.hub.Clients))
-	for client := range s.handler.hub.Clients {
+	hubClients := s.handler.hub.GetClients()
+	clients := make([]*Client, 0, len(hubClients))
+	for client := range hubClients {
 		clients = append(clients, client)
 	}
 
@@ -591,10 +589,7 @@ func (s *Server) GetClientCount() int {
 		return 0
 	}
 
-	s.handler.hub.mu.RLock()
-	defer s.handler.hub.mu.RUnlock()
-
-	return len(s.handler.hub.Clients)
+	return len(s.handler.hub.GetClients())
 }
 
 func (s *Server) DisconnectClient(id string) error {
@@ -609,22 +604,11 @@ func (s *Server) DisconnectClient(id string) error {
 // ===== ROOM MANAGEMENT =====
 
 func (s *Server) CreateRoom(name string) error {
-	if name == "" {
-		return fmt.Errorf("room name cannot be empty")
-	}
-
 	if s.handler == nil || s.handler.hub == nil {
 		return fmt.Errorf("server not properly initialized")
 	}
 
-	s.handler.hub.mu.Lock()
-	if s.handler.hub.Rooms[name] == nil {
-		s.handler.hub.Rooms[name] = make(map[*Client]bool)
-		fmt.Printf("Room created: %s\n", name)
-	}
-	s.handler.hub.mu.Unlock()
-
-	return nil
+	return s.handler.hub.CreateRoom(name)
 }
 
 func (s *Server) DeleteRoom(name string) error {
@@ -632,20 +616,7 @@ func (s *Server) DeleteRoom(name string) error {
 		return fmt.Errorf("server not properly initialized")
 	}
 
-	s.handler.hub.mu.Lock()
-	defer s.handler.hub.mu.Unlock()
-
-	if roomClients, exists := s.handler.hub.Rooms[name]; exists {
-		// first, remove all clients from the room
-		for client := range roomClients {
-			delete(roomClients, client)
-		}
-		delete(s.handler.hub.Rooms, name)
-		fmt.Printf("Room deleted: %s\n", name)
-		return nil
-	}
-
-	return fmt.Errorf("room not found: %s", name)
+	return s.handler.hub.DeleteRoom(name)
 }
 
 func (s *Server) GetRooms() []string {
@@ -653,11 +624,9 @@ func (s *Server) GetRooms() []string {
 		return []string{}
 	}
 
-	s.handler.hub.mu.RLock()
-	defer s.handler.hub.mu.RUnlock()
-
-	rooms := make([]string, 0, len(s.handler.hub.Rooms))
-	for roomName := range s.handler.hub.Rooms {
+	hubRooms := s.handler.hub.GetRooms()
+	rooms := make([]string, 0, len(hubRooms))
+	for roomName := range hubRooms {
 		rooms = append(rooms, roomName)
 	}
 
@@ -736,7 +705,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	s.handler.hub.Register <- client
+	s.handler.hub.AddClient(client)
 
 	if s.handler.handlers.OnConnect != nil {
 		s.handler.handlers.OnConnect(client)
@@ -786,7 +755,7 @@ func (s *Server) handleClientWrite(client *Client) {
 
 func (s *Server) handleClientRead(client *Client) {
 	defer func() {
-		s.handler.hub.Unregister <- client
+		s.handler.hub.RemoveClient(client)
 		client.Conn.(*websocket.Conn).Close()
 
 		if s.handler.handlers.OnDisconnect != nil {

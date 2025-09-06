@@ -13,12 +13,14 @@ type IHub interface {
 	RemoveClient(client *Client)
 	BroadcastMessage(message *Message)
 	BroadcastToRoom(room string, message *Message)
+	CreateRoom(name string) error
 	JoinRoom(client *Client, room string)
 	LeaveRoom(client *Client, room string)
 	GetRoomClients(room string) []*Client
 	GetStats() map[string]interface{}
 	GetClients() map[*Client]bool
 	GetRooms() map[string]map[*Client]bool
+	DeleteRoom(name string) error
 	IsRunning() bool
 }
 
@@ -170,6 +172,21 @@ func (h *Hub) BroadcastToRoom(room string, message *Message) {
 	}
 }
 
+func (h *Hub) CreateRoom(name string) error {
+	if name == "" {
+		return fmt.Errorf("room name cannot be empty")
+	}
+
+	h.mu.Lock()
+	if h.Rooms[name] == nil {
+		h.Rooms[name] = make(map[*Client]bool)
+		fmt.Printf("Room created: %s\n", name)
+	}
+	h.mu.Unlock()
+
+	return nil
+}
+
 func (h *Hub) JoinRoom(client *Client, room string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -254,6 +271,23 @@ func (h *Hub) GetRooms() map[string]map[*Client]bool {
 		roomsCopy[roomName] = roomClientsCopy
 	}
 	return roomsCopy
+}
+
+func (h *Hub) DeleteRoom(name string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if roomClients, exists := h.Rooms[name]; exists {
+		// first, remove all clients from the room
+		for client := range roomClients {
+			delete(roomClients, client)
+		}
+		delete(h.Rooms, name)
+		fmt.Printf("Room deleted: %s\n", name)
+		return nil
+	}
+
+	return fmt.Errorf("room not found: %s", name)
 }
 
 func (h *Hub) IsRunning() bool {

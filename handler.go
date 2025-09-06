@@ -24,7 +24,7 @@ type Handlers struct {
 }
 
 type Handler struct {
-	hub         *Hub
+	hub         IHub
 	config      *HandlerConfig
 	handlers    *Handlers
 	serializers map[EncodingType]Serializer
@@ -296,7 +296,7 @@ func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	h.hub.Register <- client
+	h.hub.AddClient(client)
 
 	if h.handlers.OnConnect != nil {
 		h.handlers.OnConnect(client)
@@ -346,7 +346,7 @@ func (h *Handler) handleClientWrite(client *Client) {
 
 func (h *Handler) handleClientRead(client *Client) {
 	defer func() {
-		h.hub.Unregister <- client
+		h.hub.RemoveClient(client)
 		client.Conn.(*websocket.Conn).Close()
 
 		if h.handlers.OnDisconnect != nil {
