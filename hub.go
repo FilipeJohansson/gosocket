@@ -6,6 +6,22 @@ import (
 	"sync"
 )
 
+type IHub interface {
+	Run()
+	Stop()
+	AddClient(client *Client)
+	RemoveClient(client *Client)
+	BroadcastMessage(message *Message)
+	BroadcastToRoom(room string, message *Message)
+	JoinRoom(client *Client, room string)
+	LeaveRoom(client *Client, room string)
+	GetRoomClients(room string) []*Client
+	GetStats() map[string]interface{}
+	GetClients() map[*Client]bool
+	GetRooms() map[string]map[*Client]bool
+	IsRunning() bool
+}
+
 type Hub struct {
 	Clients    map[*Client]bool
 	Rooms      map[string]map[*Client]bool
@@ -214,6 +230,36 @@ func (h *Hub) GetStats() map[string]interface{} {
 	stats["rooms"] = roomStats
 
 	return stats
+}
+
+func (h *Hub) GetClients() map[*Client]bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	clientsCopy := make(map[*Client]bool)
+	for client, value := range h.Clients {
+		clientsCopy[client] = value
+	}
+	return clientsCopy
+}
+
+func (h *Hub) GetRooms() map[string]map[*Client]bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	roomsCopy := make(map[string]map[*Client]bool)
+	for roomName, roomClients := range h.Rooms {
+		roomClientsCopy := make(map[*Client]bool)
+		for client, value := range roomClients {
+			roomClientsCopy[client] = value
+		}
+		roomsCopy[roomName] = roomClientsCopy
+	}
+	return roomsCopy
+}
+
+func (h *Hub) IsRunning() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.running
 }
 
 func (h *Hub) removeClientFromAllRooms(client *Client) {

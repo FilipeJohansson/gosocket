@@ -51,22 +51,44 @@ func NewHandler() *Handler {
 // ===== Fluent Interface =====
 
 func (h *Handler) WithMaxConnections(max int) *Handler {
+	if max <= 0 {
+		fmt.Println("Warning: max connections must be greater than 0, setting to default 1000")
+		max = 1000
+	}
+
 	h.config.MaxConnections = max
 	return h
 }
 
 func (h *Handler) WithMessageSize(size int64) *Handler {
+	if size <= 0 {
+		fmt.Println("Warning: message size must be greater than 0, setting to default 1024")
+		size = 1024
+	}
+
 	h.config.MessageSize = size
 	return h
 }
 
 func (h *Handler) WithTimeout(read, write time.Duration) *Handler {
+	if read < 0 || write < 0 {
+		fmt.Println("Warning: timeouts must be non-negative, setting to default 0")
+		read = 0
+		write = 0
+	}
+
 	h.config.ReadTimeout = read
 	h.config.WriteTimeout = write
 	return h
 }
 
 func (h *Handler) WithPingPong(pingPeriod, pongWait time.Duration) *Handler {
+	if pingPeriod <= 0 || pongWait <= 0 {
+		fmt.Println("Warning: ping period and pong wait must be greater than 0, setting to default 0")
+		pingPeriod = 0
+		pongWait = 0
+	}
+
 	h.config.PingPeriod = pingPeriod
 	h.config.PongWait = pongWait
 	return h

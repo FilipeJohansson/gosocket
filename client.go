@@ -3,19 +3,34 @@ package gosocket
 import (
 	"encoding/json"
 	"fmt"
-
-	"github.com/gorilla/websocket"
+	"sync"
 )
+
+type IClient interface {
+	Send(message []byte) error
+	SendMessage(message *Message) error
+	SendData(data interface{}) error
+	SendDataWithEncoding(data interface{}, encoding EncodingType) error
+	SendJSON(data interface{}) error
+	SendProtobuf(data interface{}) error
+	JoinRoom(room string) error
+	LeaveRoom(room string) error
+	GetRooms() []string
+	Disconnect() error
+	SetUserData(key string, value interface{})
+	GetUserData(key string) interface{}
+}
 
 type Client struct {
 	ID          string
-	Conn        interface{} // WebSocket connection (gorilla/websocket.Conn)
+	Conn        IWebSocketConn // WebSocket connection (gorilla/websocket.Conn)
 	MessageChan chan []byte
-	Hub         *Hub
+	Hub         IHub
 	UserData    map[string]interface{} // user custom data
+	mu          sync.RWMutex
 }
 
-func NewClient(id string, conn interface{}, hub *Hub) *Client {
+func NewClient(id string, conn IWebSocketConn, hub IHub) *Client {
 	return &Client{
 		ID:          id,
 		Conn:        conn,
@@ -117,13 +132,11 @@ func (c *Client) GetRooms() []string {
 	}
 
 	var rooms []string
-	c.Hub.mu.RLock()
-	for roomName, clients := range c.Hub.Rooms {
+	for roomName, clients := range c.Hub.GetRooms() {
 		if _, exists := clients[c]; exists {
 			rooms = append(rooms, roomName)
 		}
 	}
-	c.Hub.mu.RUnlock()
 	return rooms
 }
 
@@ -132,16 +145,20 @@ func (c *Client) Disconnect() error {
 		c.Hub.RemoveClient(c)
 	}
 
-	if conn, ok := c.Conn.(*websocket.Conn); ok {
-		return conn.Close()
+	if c.Conn != nil {
+		return c.Conn.Close()
 	}
 	return nil
 }
 
 func (c *Client) SetUserData(key string, value interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.UserData[key] = value
 }
 
 func (c *Client) GetUserData(key string) interface{} {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.UserData[key]
 }

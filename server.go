@@ -11,6 +11,65 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type IServer interface {
+	Start() error
+	StartWithContext(ctx context.Context) error
+	Stop() error
+	StopGracefully(timeout time.Duration) error
+
+	Broadcast(message []byte) error
+	BroadcastMessage(message *Message) error
+	BroadcastData(data interface{}) error
+	BroadcastDataWithEncoding(data interface{}, encoding EncodingType) error
+	BroadcastJSON(data interface{}) error
+	BroadcastProtobuf(data interface{}) error
+	BroadcastToRoom(room string, message []byte) error
+	BroadcastToRoomData(room string, data interface{}) error
+	BroadcastToRoomJSON(room string, data interface{}) error
+	BroadcastToRoomProtobuf(room string, data interface{}) error
+
+	GetClients() []*Client
+	GetClient(id string) *Client
+	GetClientsInRoom(room string) []*Client
+	GetClientCount() int
+	DisconnectClient(id string) error
+
+	CreateRoom(name string) error
+	DeleteRoom(name string) error
+	GetRooms() []string
+	JoinRoom(clientID, room string) error
+	LeaveRoom(clientID, room string) error
+
+	// Configuration methods
+	WithPort(port int) *Server
+	WithPath(path string) *Server
+	WithCORS(enabled bool) *Server
+	WithSSL(certFile, keyFile string) *Server
+	WithMaxConnections(max int) *Server
+	WithMessageSize(size int64) *Server
+	WithTimeout(read, write time.Duration) *Server
+	WithPingPong(pingPeriod, pongWait time.Duration) *Server
+	WithAllowedOrigins(origins []string) *Server
+	WithEncoding(encoding EncodingType) *Server
+	WithSerializer(encoding EncodingType, serializer Serializer) *Server
+	WithJSONSerializer() *Server
+	WithProtobufSerializer() *Server
+	WithRawSerializer() *Server
+	WithMiddleware(middleware Middleware) *Server
+	WithAuth(authFunc AuthFunc) *Server
+
+	// Event handlers
+	OnConnect(handler func(*Client) error) *Server
+	OnDisconnect(handler func(*Client) error) *Server
+	OnMessage(handler func(*Client, *Message) error) *Server
+	OnRawMessage(handler func(*Client, []byte) error) *Server
+	OnJSONMessage(handler func(*Client, interface{}) error) *Server
+	OnProtobufMessage(handler func(*Client, interface{}) error) *Server
+	OnError(handler func(*Client, error) error) *Server
+	OnPing(handler func(*Client) error) *Server
+	OnPong(handler func(*Client) error) *Server
+}
+
 type Server struct {
 	handler   *Handler
 	config    *ServerConfig
@@ -47,6 +106,15 @@ func (s *Server) WithPath(path string) *Server {
 	if s.config == nil {
 		s.config = DefaultServerConfig()
 	}
+
+	if path == "" {
+		path = "/"
+	}
+
+	if path[0] != '/' {
+		path = "/" + path
+	}
+
 	s.config.Path = path
 	return s
 }
@@ -63,6 +131,12 @@ func (s *Server) WithSSL(certFile, keyFile string) *Server {
 	if s.config == nil {
 		s.config = DefaultServerConfig()
 	}
+
+	if certFile == "" || keyFile == "" {
+		fmt.Println("Warning: certFile or keyFile is empty, SSL not enabled")
+		return s
+	}
+
 	s.config.EnableSSL = true
 	s.config.CertFile = certFile
 	s.config.KeyFile = keyFile
@@ -252,11 +326,6 @@ func (s *Server) StartWithContext(ctx context.Context) error {
 
 	if s.config.Port <= 0 || s.config.Port > 65535 {
 		return fmt.Errorf("invalid port: %d", s.config.Port)
-	}
-
-	if s.config.Path == "" {
-		// ? maybe don't check this? maybe the developer wants this path?
-		// s.config.Path = "/ws"
 	}
 
 	if len(s.handler.serializers) <= 0 {
