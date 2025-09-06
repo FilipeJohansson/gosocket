@@ -6,21 +6,54 @@ import (
 	"sync"
 )
 
+// IHub is an interface for a hub that manages client connections and rooms.
+//
+// It provides methods for running and stopping the hub, managing clients and rooms,
+// broadcasting messages, and retrieving statistics and client information.
 type IHub interface {
+	// Run starts the hub.
 	Run()
+
+	// Stop stops the hub.
 	Stop()
+
+	// AddClient adds a client to the hub.
 	AddClient(client *Client)
+
+	// RemoveClient removes a client from the hub.
 	RemoveClient(client *Client)
+
+	// BroadcastMessage sends a message to all connected clients.
 	BroadcastMessage(message *Message)
+
+	// BroadcastToRoom sends a message to all clients in a specific room.
 	BroadcastToRoom(room string, message *Message)
+
+	// CreateRoom creates a new room with the given name.
 	CreateRoom(name string) error
+
+	// JoinRoom adds a client to a room.
 	JoinRoom(client *Client, room string)
+
+	// LeaveRoom removes a client from a room.
 	LeaveRoom(client *Client, room string)
+
+	// GetRoomClients returns a list of clients in a room.
 	GetRoomClients(room string) []*Client
+
+	// GetStats returns statistics about the hub.
 	GetStats() map[string]interface{}
+
+	// GetClients returns a map of all connected clients.
 	GetClients() map[*Client]bool
+
+	// GetRooms returns a map of all rooms and their clients.
 	GetRooms() map[string]map[*Client]bool
+
+	// DeleteRoom deletes a room with the given name.
 	DeleteRoom(name string) error
+
+	// IsRunning returns whether the hub is currently running.
 	IsRunning() bool
 }
 

@@ -11,62 +11,164 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// IServer defines the interface for a server that can manage client connections,
+// broadcast messages, and handle various events.
 type IServer interface {
+	// Start starts the server.
 	Start() error
+
+	// StartWithContext starts the server with the given context.
 	StartWithContext(ctx context.Context) error
+
+	// Stop stops the server.
 	Stop() error
+
+	// StopGracefully stops the server gracefully with the given timeout.
 	StopGracefully(timeout time.Duration) error
 
+	// Broadcast methods
+
+	// Broadcast sends a message to all connected clients.
 	Broadcast(message []byte) error
+
+	// BroadcastMessage sends a message to all connected clients.
 	BroadcastMessage(message *Message) error
+
+	// BroadcastData sends data to all connected clients.
 	BroadcastData(data interface{}) error
+
+	// BroadcastDataWithEncoding sends data to all connected clients with the given encoding.
 	BroadcastDataWithEncoding(data interface{}, encoding EncodingType) error
+
+	// BroadcastJSON sends JSON data to all connected clients.
 	BroadcastJSON(data interface{}) error
+
+	// BroadcastProtobuf sends Protobuf data to all connected clients.
 	BroadcastProtobuf(data interface{}) error
+
+	// BroadcastToRoom sends a message to all clients in the given room.
 	BroadcastToRoom(room string, message []byte) error
+
+	// BroadcastToRoomData sends data to all clients in the given room.
 	BroadcastToRoomData(room string, data interface{}) error
+
+	// BroadcastToRoomJSON sends JSON data to all clients in the given room.
 	BroadcastToRoomJSON(room string, data interface{}) error
+
+	// BroadcastToRoomProtobuf sends Protobuf data to all clients in the given room.
 	BroadcastToRoomProtobuf(room string, data interface{}) error
 
+	// Client management methods
+
+	// GetClients returns a list of all connected clients.
 	GetClients() []*Client
+
+	// GetClient returns the client with the given ID.
 	GetClient(id string) *Client
+
+	// GetClientsInRoom returns a list of all clients in the given room.
 	GetClientsInRoom(room string) []*Client
+
+	// GetClientCount returns the number of connected clients.
 	GetClientCount() int
+
+	// DisconnectClient disconnects the client with the given ID.
 	DisconnectClient(id string) error
 
+	// Room management methods
+
+	// CreateRoom creates a new room with the given name.
 	CreateRoom(name string) error
+
+	// DeleteRoom deletes the room with the given name.
 	DeleteRoom(name string) error
+
+	// GetRooms returns a list of all rooms.
 	GetRooms() []string
+
+	// JoinRoom joins the client with the given ID to the room with the given name.
 	JoinRoom(clientID, room string) error
+
+	// LeaveRoom leaves the client with the given ID from the room with the given name.
 	LeaveRoom(clientID, room string) error
 
 	// Configuration methods
+
+	// WithPort sets the port number for the server.
 	WithPort(port int) *Server
+
+	// WithPath sets the path for the server.
 	WithPath(path string) *Server
+
+	// WithCORS enables or disables CORS for the server.
 	WithCORS(enabled bool) *Server
+
+	// WithSSL sets the SSL certificate and key files for the server.
 	WithSSL(certFile, keyFile string) *Server
+
+	// WithMaxConnections sets the maximum number of connections for the server.
 	WithMaxConnections(max int) *Server
+
+	// WithMessageSize sets the maximum message size for the server.
 	WithMessageSize(size int64) *Server
+
+	// WithTimeout sets the read and write timeouts for the server.
 	WithTimeout(read, write time.Duration) *Server
+
+	// WithPingPong sets the ping and pong periods for the server.
 	WithPingPong(pingPeriod, pongWait time.Duration) *Server
+
+	// WithAllowedOrigins sets the allowed origins for the server.
 	WithAllowedOrigins(origins []string) *Server
+
+	// WithEncoding sets the encoding for the server.
 	WithEncoding(encoding EncodingType) *Server
+
+	// WithSerializer sets the serializer for the server.
 	WithSerializer(encoding EncodingType, serializer Serializer) *Server
+
+	// WithJSONSerializer sets the JSON serializer for the server.
 	WithJSONSerializer() *Server
+
+	// WithProtobufSerializer sets the Protobuf serializer for the server.
 	WithProtobufSerializer() *Server
+
+	// WithRawSerializer sets the raw serializer for the server.
 	WithRawSerializer() *Server
+
+	// WithMiddleware sets the middleware for the server.
 	WithMiddleware(middleware Middleware) *Server
+
+	// WithAuth sets the authentication function for the server.
 	WithAuth(authFunc AuthFunc) *Server
 
 	// Event handlers
+
+	// OnConnect sets the connect handler for the server.
 	OnConnect(handler func(*Client) error) *Server
+
+	// OnDisconnect sets the disconnect handler for the server.
 	OnDisconnect(handler func(*Client) error) *Server
+
+	// OnMessage sets the message handler for the server.
 	OnMessage(handler func(*Client, *Message) error) *Server
+
+	// OnRawMessage sets the raw message handler for the server.
 	OnRawMessage(handler func(*Client, []byte) error) *Server
+
+	// OnJSONMessage sets the JSON message handler for the server.
 	OnJSONMessage(handler func(*Client, interface{}) error) *Server
+
+	// OnProtobufMessage sets the Protobuf message handler for the server.
 	OnProtobufMessage(handler func(*Client, interface{}) error) *Server
+
+	// OnError sets the error handler for the server.
 	OnError(handler func(*Client, error) error) *Server
+
+	// OnPing sets the ping handler for the server.
 	OnPing(handler func(*Client) error) *Server
+
+	// OnPong sets the pong handler for the server.
 	OnPong(handler func(*Client) error) *Server
 }
 

@@ -6,18 +6,55 @@ import (
 	"sync"
 )
 
+// IClient is an interface for a client in a WebSocket application.
+// It defines the methods that a client must implement to interact with the server.
 type IClient interface {
+	// Send sends a raw byte message to the server.
+	// The message is sent as-is, without any encoding or processing.
 	Send(message []byte) error
+
+	// SendMessage sends a message to the server, with the option to specify encoding.
+	// The message is sent with the specified encoding, if any.
 	SendMessage(message *Message) error
+
+	// SendData sends arbitrary data to the server, automatically encoding it as JSON.
+	// The data is marshaled to JSON and sent to the server.
 	SendData(data interface{}) error
+
+	// SendDataWithEncoding sends arbitrary data to the server with a specified encoding.
+	// The data is marshaled to the specified encoding and sent to the server.
 	SendDataWithEncoding(data interface{}, encoding EncodingType) error
+
+	// SendJSON sends JSON-encoded data to the server.
+	// The data is marshaled to JSON and sent to the server.
 	SendJSON(data interface{}) error
+
+	// SendProtobuf sends Protobuf-encoded data to the server.
+	// The data is marshaled to Protobuf and sent to the server.
 	SendProtobuf(data interface{}) error
+
+	// JoinRoom joins a specific room on the server.
+	// The client becomes a member of the specified room.
 	JoinRoom(room string) error
+
+	// LeaveRoom leaves a specific room on the server.
+	// The client is removed from the specified room.
 	LeaveRoom(room string) error
+
+	// GetRooms retrieves a list of rooms the client is currently in.
+	// The list of rooms is returned as a slice of strings.
 	GetRooms() []string
+
+	// Disconnect disconnects the client from the server.
+	// The client's connection to the server is closed.
 	Disconnect() error
+
+	// SetUserData sets arbitrary user data associated with the client.
+	// The data is stored on the client and can be retrieved later.
 	SetUserData(key string, value interface{})
+
+	// GetUserData retrieves arbitrary user data associated with the client.
+	// The data is returned as an interface{} value.
 	GetUserData(key string) interface{}
 }
 
