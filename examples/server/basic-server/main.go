@@ -14,17 +14,17 @@ func main() {
 
 	ws.WithPort(8080).
 		WithPath("/ws").
-		OnConnect(func(client *gosocket.Client) error {
+		OnConnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 			fmt.Printf("Client connected: %s\n", client.ID)
 			return nil
 		}).
-		OnMessage(func(client *gosocket.Client, message *gosocket.Message) error {
+		OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.HandlerContext) error {
 			fmt.Printf("Received: %s\n", string(message.RawData))
 			// Echo back
 			client.Send(message.RawData)
 			return nil
 		}).
-		OnDisconnect(func(client *gosocket.Client) error {
+		OnDisconnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 			fmt.Printf("Client disconnected: %s\n", client.ID)
 			return nil
 		})

@@ -67,6 +67,7 @@ type Client struct {
 	MessageChan chan []byte
 	Hub         IHub
 	UserData    map[string]interface{} // user custom data
+	ConnInfo    *ConnectionInfo
 	mu          sync.RWMutex
 }
 
@@ -88,6 +89,7 @@ func NewClient(id string, conn IWebSocketConn, hub IHub) *Client {
 		Hub:         hub,
 		MessageChan: make(chan []byte, 256),
 		UserData:    make(map[string]interface{}),
+		ConnInfo:    nil, // will be defined at HandleWebSocket
 	}
 }
 

@@ -4,9 +4,12 @@
 package gosocket
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,15 +18,278 @@ import (
 
 // every events handlers
 type Handlers struct {
-	OnConnect         func(*Client) error
-	OnDisconnect      func(*Client) error
-	OnMessage         func(*Client, *Message) error    // generic handler
-	OnRawMessage      func(*Client, []byte) error      // raw data handler
-	OnJSONMessage     func(*Client, interface{}) error // JSON specific handler
-	OnProtobufMessage func(*Client, interface{}) error // Protobuf specific handler
-	OnError           func(*Client, error) error
-	OnPing            func(*Client) error
-	OnPong            func(*Client) error
+	OnConnect         func(*Client, *HandlerContext) error
+	OnDisconnect      func(*Client, *HandlerContext) error
+	OnMessage         func(*Client, *Message, *HandlerContext) error    // generic handler
+	OnRawMessage      func(*Client, []byte, *HandlerContext) error      // raw data handler
+	OnJSONMessage     func(*Client, interface{}, *HandlerContext) error // JSON specific handler
+	OnProtobufMessage func(*Client, interface{}, *HandlerContext) error // Protobuf specific handler
+	OnError           func(*Client, error, *HandlerContext) error
+	OnPing            func(*Client, *HandlerContext) error
+	OnPong            func(*Client, *HandlerContext) error
+}
+
+type HandlerContext struct {
+	ctx       context.Context
+	startTime time.Time
+	connInfo  *ConnectionInfo
+
+	handler *Handler
+	hub     IHub
+}
+
+// NewHandlerContext creates a new context (for inner goroutines)
+// It creates a new context with the given handler and hub, and the same
+// connection info as the original context. The context is created with a
+// new background context, and the start time is set to the current time.
+func NewHandlerContext(handler *Handler) *HandlerContext {
+	return &HandlerContext{
+		handler:   handler,
+		hub:       handler.hub,
+		ctx:       context.Background(),
+		startTime: time.Now(),
+		connInfo: &ConnectionInfo{
+			RequestID: generateRequestID(),
+		},
+	}
+}
+
+// NewHandlerContextFromRequest creates a new context from the given http request.
+// It retrieves the client IP, user agent, origin, and headers from the request
+// and uses them to create a new context.
+func NewHandlerContextFromRequest(handler *Handler, r *http.Request) *HandlerContext {
+	return &HandlerContext{
+		handler:   handler,
+		hub:       handler.hub,
+		ctx:       context.Background(),
+		startTime: time.Now(),
+		connInfo: &ConnectionInfo{
+			ClientIP:  getClientIPFromRequest(r),
+			UserAgent: r.Header.Get("User-Agent"),
+			Origin:    r.Header.Get("Origin"),
+			Headers:   extractHeaders(r),
+			RequestID: generateRequestID(),
+		},
+	}
+}
+
+// NewHandlerContextWithConnection creates a new context with the given connection info. This
+// method is useful when you want to reuse the same connection info for multiple contexts.
+// It returns a new context with the given connection info, and the same handler and hub as the
+// original context. The context is created with a new background context, and the start time is
+// set to the current time.
+func NewHandlerContextWithConnection(handler *Handler, connInfo *ConnectionInfo) *HandlerContext {
+	return &HandlerContext{
+		handler:   handler,
+		hub:       handler.hub,
+		ctx:       context.Background(),
+		startTime: time.Now(),
+		connInfo:  connInfo,
+	}
+}
+
+// Context returns the context associated with the handler context. The context
+// is the parent context that was passed when creating the handler context. The
+// context can be used to cancel the context, or to retrieve values from the
+// context.
+func (hc *HandlerContext) Context() context.Context {
+	return hc.ctx
+}
+
+// WithContext returns a new context with the given context. The context is the parent context
+// that was passed when creating the handler context. The context can be used to cancel the
+// context, or to retrieve values from the context. The new context is a shallow copy of the
+// original context, with the context replaced.
+func (hc *HandlerContext) WithContext(ctx context.Context) *HandlerContext {
+	newHC := *hc
+	newHC.ctx = ctx
+	return &newHC
+}
+
+// WithTimeout returns a new context with the given timeout, and a cancel function. The
+// returned context is a shallow copy of the original context, with the timeout set to the
+// given value. The cancel function can be used to cancel the context, or to retrieve values
+// from the context. The context can be used to cancel the context, or to retrieve values
+// from the context.
+func (hc *HandlerContext) WithTimeout(timeout time.Duration) (*HandlerContext, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(hc.ctx, timeout)
+	return hc.WithContext(ctx), cancel
+}
+
+// RequestID returns the request ID associated with the context. The request ID is a unique
+// identifier for the connection, and can be used to identify the connection in logs and metrics.
+// If the context is not associated with a connection, an empty string is returned.
+func (hc *HandlerContext) RequestID() string {
+	if hc.connInfo != nil {
+		return hc.connInfo.RequestID
+	}
+	return ""
+}
+
+// ClientIP returns the client IP address associated with the context.
+// If the context is not associated with a connection, "unknown" is returned.
+func (hc *HandlerContext) ClientIP() string {
+	if hc.connInfo != nil {
+		return hc.connInfo.ClientIP
+	}
+	return "unknown"
+}
+
+// UserAgent returns the user agent associated with the context.
+// If the context is not associated with a connection, an empty string is returned.
+func (hc *HandlerContext) UserAgent() string {
+	if hc.connInfo != nil {
+		return hc.connInfo.UserAgent
+	}
+	return ""
+}
+
+// Origin returns the origin associated with the context.
+// The origin is the value of the Origin header of the request that
+// established the connection. If the context is not associated with a
+// connection, an empty string is returned.
+func (hc *HandlerContext) Origin() string {
+	if hc.connInfo != nil {
+		return hc.connInfo.Origin
+	}
+	return ""
+}
+
+// Header returns the value of the given header key associated with the context.
+// If the context is not associated with a connection, an empty string is returned.
+func (hc *HandlerContext) Header(key string) string {
+	if hc.connInfo != nil && hc.connInfo.Headers != nil {
+		return hc.connInfo.Headers[key]
+	}
+	return ""
+}
+
+// Headers returns the HTTP headers associated with the context.
+// If the context is not associated with a connection, nil is returned.
+func (hc *HandlerContext) Headers() map[string]string {
+	if hc.connInfo != nil {
+		return hc.connInfo.Headers
+	}
+	return nil
+}
+
+// ProcessingDuration returns the time elapsed since the context was created.
+// The returned duration is the time elapsed between the context creation
+// time and the current time. If the context is not associated with a
+// connection, 0 is returned.
+func (hc *HandlerContext) ProcessingDuration() time.Duration {
+	return time.Since(hc.startTime)
+}
+
+// BroadcastToAll broadcasts a message to all connected clients.
+//
+// This function is a shortcut for calling hub.BroadcastMessage(message).
+// If the context is not associated with a hub, an error is returned.
+//
+// It returns an error if the hub is not properly set.
+func (hc *HandlerContext) BroadcastToAll(message *Message) error {
+	if hc.hub == nil {
+		return fmt.Errorf("hub is nil")
+	}
+
+	hc.hub.BroadcastMessage(message)
+	return nil
+}
+
+// BroadcastToRoom broadcasts a message to all clients in the specified room.
+//
+// This function is a shortcut for calling hub.BroadcastToRoom(room, message).
+// If the context is not associated with a hub, an error is returned.
+//
+// It returns an error if the hub is not properly set.
+func (hc *HandlerContext) BroadcastToRoom(room string, message *Message) error {
+	if hc.hub == nil {
+		return fmt.Errorf("hub is nil")
+	}
+
+	message.Room = room
+	hc.hub.BroadcastToRoom(room, message)
+	return nil
+}
+
+// BroadcastJSONToAll broadcasts the given data as JSON to all connected clients.
+//
+// It wraps the given data in a Message and sets the Encoding to JSON, then
+// calls BroadcastToAll to send the message.
+//
+// It returns an error if the hub is not properly set.
+func (hc *HandlerContext) BroadcastJSONToAll(data interface{}) error {
+	message := NewMessage(TextMessage, data)
+	message.Encoding = JSON
+	return hc.BroadcastToAll(message)
+}
+
+// BroadcastJSONToRoom broadcasts the given data as JSON to all clients in the specified room.
+//
+// It wraps the given data in a Message and sets the Encoding to JSON, then
+// calls BroadcastToRoom to send the message.
+//
+// It returns an error if the hub is not properly set.
+func (hc *HandlerContext) BroadcastJSONToRoom(room string, data interface{}) error {
+	message := NewMessage(TextMessage, data)
+	message.Encoding = JSON
+	return hc.BroadcastToRoom(room, message)
+}
+
+// GetClientsInRoom returns a list of all clients in the given room. If the
+// context is not associated with a hub, an empty slice is returned.
+//
+// This method is safe to call concurrently.
+func (hc *HandlerContext) GetClientsInRoom(room string) []*Client {
+	if hc.hub == nil {
+		return []*Client{}
+	}
+	return hc.hub.GetRoomClients(room)
+}
+
+// GetAllClients returns a list of all clients connected to the hub.
+//
+// If the context is not associated with a hub, an empty slice is returned.
+//
+// This method is safe to call concurrently.
+func (hc *HandlerContext) GetAllClients() []*Client {
+	if hc.hub == nil {
+		return []*Client{}
+	}
+
+	clients := []*Client{}
+	for client := range hc.hub.GetClients() {
+		clients = append(clients, client)
+	}
+	return clients
+}
+
+// GetStats returns a map with statistics about the hub.
+//
+// If the context is not associated with a hub, an empty map is returned.
+//
+// This method is safe to call concurrently.
+func (hc *HandlerContext) GetStats() map[string]interface{} {
+	if hc.hub == nil {
+		return map[string]interface{}{}
+	}
+	return hc.hub.GetStats()
+}
+
+// Handler returns the handler associated with the context. This can be used to
+// access the underlying handler's configuration and functionality.
+func (hc *HandlerContext) Handler() *Handler {
+	return hc.handler
+}
+
+// Hub returns the hub associated with the context. This can be used to access the
+// hub's methods and configuration. The returned hub is the same as the one passed
+// when creating the HandlerContext. If the context is not associated with a hub,
+// nil is returned.
+//
+// This method is safe to call concurrently.
+func (hc *HandlerContext) Hub() IHub {
+	return hc.hub
 }
 
 type Handler struct {
@@ -186,7 +452,7 @@ func (h *Handler) WithAuth(authFunc AuthFunc) *Handler {
 // error if the connection should be closed. The handler is called after the
 // authentication function has been called and the client has been added to the
 // server's list of clients.
-func (h *Handler) OnConnect(handler func(*Client) error) *Handler {
+func (h *Handler) OnConnect(handler func(*Client, *HandlerContext) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
 	}
@@ -198,7 +464,7 @@ func (h *Handler) OnConnect(handler func(*Client) error) *Handler {
 // called when a client disconnects from the server. The handler should return an
 // error if the disconnection should be treated as an error. The handler is called
 // after the client has been removed from the server's list of clients.
-func (h *Handler) OnDisconnect(handler func(*Client) error) *Handler {
+func (h *Handler) OnDisconnect(handler func(*Client, *HandlerContext) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
 	}
@@ -210,7 +476,7 @@ func (h *Handler) OnDisconnect(handler func(*Client) error) *Handler {
 // a new message is received from a client. The handler should return an error if
 // the message should be treated as an error. The handler is called after the
 // message has been decoded and deserialized.
-func (h *Handler) OnMessage(handler func(*Client, *Message) error) *Handler {
+func (h *Handler) OnMessage(handler func(*Client, *Message, *HandlerContext) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
 	}
@@ -222,7 +488,7 @@ func (h *Handler) OnMessage(handler func(*Client, *Message) error) *Handler {
 // called when a new raw message is received from a client. The handler should
 // return an error if the message should be treated as an error. The handler is
 // called after the message has been decoded, but before it has been deserialized.
-func (h *Handler) OnRawMessage(handler func(*Client, []byte) error) *Handler {
+func (h *Handler) OnRawMessage(handler func(*Client, []byte, *HandlerContext) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
 	}
@@ -234,7 +500,7 @@ func (h *Handler) OnRawMessage(handler func(*Client, []byte) error) *Handler {
 // called when a new JSON message is received from a client. The handler should
 // return an error if the message should be treated as an error. The handler is
 // called after the message has been decoded and parsed as JSON.
-func (h *Handler) OnJSONMessage(handler func(*Client, interface{}) error) *Handler {
+func (h *Handler) OnJSONMessage(handler func(*Client, interface{}, *HandlerContext) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
 	}
@@ -246,7 +512,7 @@ func (h *Handler) OnJSONMessage(handler func(*Client, interface{}) error) *Handl
 // is called when a new Protobuf message is received from a client. The handler
 // should return an error if the message should be treated as an error. The handler
 // is called after the message has been decoded and parsed as Protobuf.
-func (h *Handler) OnProtobufMessage(handler func(*Client, interface{}) error) *Handler {
+func (h *Handler) OnProtobufMessage(handler func(*Client, interface{}, *HandlerContext) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
 	}
@@ -259,7 +525,7 @@ func (h *Handler) OnProtobufMessage(handler func(*Client, interface{}) error) *H
 // error should be treated as an error. The handler is called with the
 // client that caused the error and the error itself. The handler is called
 // after the error has been logged.
-func (h *Handler) OnError(handler func(*Client, error) error) *Handler {
+func (h *Handler) OnError(handler func(*Client, error, *HandlerContext) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
 	}
@@ -271,7 +537,7 @@ func (h *Handler) OnError(handler func(*Client, error) error) *Handler {
 // called when a ping message is sent by a client. The handler should
 // return an error if the ping should be treated as an error. The handler
 // is called with the client that sent the ping.
-func (h *Handler) OnPing(handler func(*Client) error) *Handler {
+func (h *Handler) OnPing(handler func(*Client, *HandlerContext) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
 	}
@@ -283,7 +549,7 @@ func (h *Handler) OnPing(handler func(*Client) error) *Handler {
 // pong message is sent by a client. The handler should return an error if the
 // pong should be treated as an error. The handler is called with the client that
 // sent the pong.
-func (h *Handler) OnPong(handler func(*Client) error) *Handler {
+func (h *Handler) OnPong(handler func(*Client, *HandlerContext) error) *Handler {
 	if h.handlers == nil {
 		h.handlers = &Handlers{}
 	}
@@ -363,16 +629,22 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	handlerCtx := NewHandlerContextFromRequest(h, r)
+	handlerCtx.connInfo.ClientIP = getClientIPFromRequest(r)
+	handlerCtx.connInfo.RequestID = generateRequestID()
+
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		if h.handlers.OnError != nil {
-			h.handlers.OnError(nil, fmt.Errorf("websocket upgrade failed: %w", err))
+			h.handlers.OnError(nil, fmt.Errorf("websocket upgrade failed: %w", err), handlerCtx)
 		}
 		return
 	}
 
 	clientId := generateClientID()
 	client := NewClient(clientId, conn, h.hub)
+
+	client.ConnInfo = handlerCtx.connInfo
 
 	for key, value := range userData {
 		client.SetUserData(key, value)
@@ -383,7 +655,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(h.config.PongWait))
 		if h.handlers.OnPong != nil {
-			h.handlers.OnPong(client)
+			h.handlers.OnPong(client, handlerCtx)
 		}
 		return nil
 	})
@@ -391,7 +663,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	h.hub.AddClient(client)
 
 	if h.handlers.OnConnect != nil {
-		h.handlers.OnConnect(client)
+		h.handlers.OnConnect(client, handlerCtx)
 	}
 
 	go h.handleClientWrite(client)
@@ -413,6 +685,8 @@ func (h *Handler) handleClientWrite(client *Client) {
 
 	conn := client.Conn.(*websocket.Conn)
 
+	handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
+
 	for {
 		select {
 		case message, ok := <-client.MessageChan:
@@ -424,7 +698,7 @@ func (h *Handler) handleClientWrite(client *Client) {
 
 			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				if h.handlers.OnError != nil {
-					h.handlers.OnError(client, err)
+					h.handlers.OnError(client, err, handlerCtx)
 				}
 				return
 			}
@@ -436,7 +710,7 @@ func (h *Handler) handleClientWrite(client *Client) {
 			}
 
 			if h.handlers.OnPing != nil {
-				h.handlers.OnPing(client)
+				h.handlers.OnPing(client, handlerCtx)
 			}
 		}
 	}
@@ -453,7 +727,8 @@ func (h *Handler) handleClientRead(client *Client) {
 		client.Conn.(*websocket.Conn).Close()
 
 		if h.handlers.OnDisconnect != nil {
-			h.handlers.OnDisconnect(client)
+			handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
+			h.handlers.OnDisconnect(client, handlerCtx)
 		}
 	}()
 
@@ -464,7 +739,8 @@ func (h *Handler) handleClientRead(client *Client) {
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				if h.handlers.OnError != nil {
-					h.handlers.OnError(client, err)
+					handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
+					h.handlers.OnError(client, err, handlerCtx)
 				}
 			}
 			break
@@ -492,18 +768,20 @@ func (h *Handler) handleClientRead(client *Client) {
 // to JSON, and passes the unmarshaled data to the handler. If the OnJSONMessage
 // handler returns an error, it calls the OnError handler if it is not nil.
 func (h *Handler) processMessage(client *Client, message *Message) {
+	handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
+
 	if h.handlers.OnMessage != nil {
-		if err := h.handlers.OnMessage(client, message); err != nil {
+		if err := h.handlers.OnMessage(client, message, handlerCtx); err != nil {
 			if h.handlers.OnError != nil {
-				h.handlers.OnError(client, err)
+				h.handlers.OnError(client, err, handlerCtx)
 			}
 		}
 	}
 
 	if h.handlers.OnRawMessage != nil {
-		if err := h.handlers.OnRawMessage(client, message.RawData); err != nil {
+		if err := h.handlers.OnRawMessage(client, message.RawData, handlerCtx); err != nil {
 			if h.handlers.OnError != nil {
-				h.handlers.OnError(client, err)
+				h.handlers.OnError(client, err, handlerCtx)
 			}
 		}
 	}
@@ -513,9 +791,9 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 		if err := json.Unmarshal(message.RawData, &jsonData); err == nil {
 			message.Data = jsonData
 			message.Encoding = JSON
-			if err := h.handlers.OnJSONMessage(client, jsonData); err != nil {
+			if err := h.handlers.OnJSONMessage(client, jsonData, handlerCtx); err != nil {
 				if h.handlers.OnError != nil {
-					h.handlers.OnError(client, err)
+					h.handlers.OnError(client, err, handlerCtx)
 				}
 			}
 		}
@@ -532,4 +810,54 @@ func (h *Handler) ensureHubRunning() {
 	h.hubRunning.Do(func() {
 		go h.hub.Run()
 	})
+}
+
+// extractHeaders extracts relevant headers from the given http request.
+// It returns a map of header name to header value. Only the following
+// headers are considered: Authorization, X-Forwarded-For, X-Real-IP,
+// Accept, Accept-Language, and Accept-Encoding. If a header is not
+// present in the request, it is not included in the returned map.
+func extractHeaders(r *http.Request) map[string]string {
+	headers := make(map[string]string)
+
+	// common headers that might be useful in handlers
+	relevantHeaders := []string{
+		"Authorization",
+		"X-Forwarded-For",
+		"X-Real-IP",
+		"Accept",
+		"Accept-Language",
+		"Accept-Encoding",
+	}
+
+	for _, header := range relevantHeaders {
+		if value := r.Header.Get(header); value != "" {
+			headers[header] = value
+		}
+	}
+
+	return headers
+}
+
+// getClientIPFromRequest returns the client's IP address from the given http request.
+// If the request contains a valid X-Real-IP or X-Forwarded-For header, it returns the IP
+// address from the header. Otherwise, it returns the IP address from the remote address.
+// The IP address is returned as a string in the format "192.0.2.1".
+func getClientIPFromRequest(r *http.Request) string {
+	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
+	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
+		return strings.Split(ip, ",")[0]
+	}
+	return strings.Split(r.RemoteAddr, ":")[0]
+}
+
+// generateRequestID returns a unique request ID as a string. The request ID
+// is a concatenation of the current time in nanoseconds and a random number
+// between 0 and 9999. The request ID is used to identify requests and is
+// passed to the OnRequest handler if it is not nil. The request ID can be
+// used to identify requests in logs, metrics, and other monitoring tools.
+func generateRequestID() string {
+	return fmt.Sprintf("req_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
 }
