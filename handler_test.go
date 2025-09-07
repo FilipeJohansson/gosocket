@@ -275,35 +275,35 @@ func TestHandler_EventHandlers(t *testing.T) {
 	)
 
 	handler := NewHandler().
-		OnConnect(func(c *Client) error {
+		OnConnect(func(c *Client, ctx *HandlerContext) error {
 			connectCalled = true
 			return nil
 		}).
-		OnDisconnect(func(c *Client) error {
+		OnDisconnect(func(c *Client, ctx *HandlerContext) error {
 			disconnectCalled = true
 			return nil
 		}).
-		OnMessage(func(c *Client, m *Message) error {
+		OnMessage(func(c *Client, m *Message, ctx *HandlerContext) error {
 			messageCalled = true
 			return nil
 		}).
-		OnRawMessage(func(c *Client, data []byte) error {
+		OnRawMessage(func(c *Client, data []byte, ctx *HandlerContext) error {
 			rawMessageCalled = true
 			return nil
 		}).
-		OnJSONMessage(func(c *Client, data interface{}) error {
+		OnJSONMessage(func(c *Client, data interface{}, ctx *HandlerContext) error {
 			jsonMessageCalled = true
 			return nil
 		}).
-		OnError(func(c *Client, err error) error {
+		OnError(func(c *Client, err error, ctx *HandlerContext) error {
 			errorCalled = true
 			return nil
 		}).
-		OnPing(func(c *Client) error {
+		OnPing(func(c *Client, ctx *HandlerContext) error {
 			pingCalled = true
 			return nil
 		}).
-		OnPong(func(c *Client) error {
+		OnPong(func(c *Client, ctx *HandlerContext) error {
 			pongCalled = true
 			return nil
 		})
@@ -320,15 +320,16 @@ func TestHandler_EventHandlers(t *testing.T) {
 	// test that handlers can be called
 	client := NewClient("test", &MockWebSocketConn{}, NewHub())
 	message := NewMessage(TextMessage, "test")
+	ctx := NewHandlerContext(handler)
 
-	handler.handlers.OnConnect(client)
-	handler.handlers.OnDisconnect(client)
-	handler.handlers.OnMessage(client, message)
-	handler.handlers.OnRawMessage(client, []byte("test"))
-	handler.handlers.OnJSONMessage(client, map[string]string{"test": "data"})
-	handler.handlers.OnError(client, errors.New("test error"))
-	handler.handlers.OnPing(client)
-	handler.handlers.OnPong(client)
+	handler.handlers.OnConnect(client, ctx)
+	handler.handlers.OnDisconnect(client, ctx)
+	handler.handlers.OnMessage(client, message, ctx)
+	handler.handlers.OnRawMessage(client, []byte("test"), ctx)
+	handler.handlers.OnJSONMessage(client, map[string]string{"test": "data"}, ctx)
+	handler.handlers.OnError(client, errors.New("test error"), ctx)
+	handler.handlers.OnPing(client, ctx)
+	handler.handlers.OnPong(client, ctx)
 
 	assert.True(t, connectCalled)
 	assert.True(t, disconnectCalled)
@@ -353,7 +354,7 @@ func TestHandler_ProcessMessage(t *testing.T) {
 		{
 			name: "processes message with OnMessage handler",
 			setupHandlers: func(h *Handler) {
-				h.OnMessage(func(c *Client, m *Message) error {
+				h.OnMessage(func(c *Client, m *Message, ctx *HandlerContext) error {
 					return nil
 				})
 			},
@@ -363,7 +364,7 @@ func TestHandler_ProcessMessage(t *testing.T) {
 		{
 			name: "processes message with OnRawMessage handler",
 			setupHandlers: func(h *Handler) {
-				h.OnRawMessage(func(c *Client, data []byte) error {
+				h.OnRawMessage(func(c *Client, data []byte, ctx *HandlerContext) error {
 					return nil
 				})
 			},
@@ -373,7 +374,7 @@ func TestHandler_ProcessMessage(t *testing.T) {
 		{
 			name: "processes JSON message with OnJSONMessage handler",
 			setupHandlers: func(h *Handler) {
-				h.OnJSONMessage(func(c *Client, data interface{}) error {
+				h.OnJSONMessage(func(c *Client, data interface{}, ctx *HandlerContext) error {
 					return nil
 				})
 			},
@@ -383,10 +384,10 @@ func TestHandler_ProcessMessage(t *testing.T) {
 		{
 			name: "handles error in OnMessage handler",
 			setupHandlers: func(h *Handler) {
-				h.OnMessage(func(c *Client, m *Message) error {
+				h.OnMessage(func(c *Client, m *Message, ctx *HandlerContext) error {
 					return errors.New("handler error")
 				})
-				h.OnError(func(c *Client, err error) error {
+				h.OnError(func(c *Client, err error, ctx *HandlerContext) error {
 					assert.Contains(t, err.Error(), "handler error")
 					return nil
 				})
@@ -398,7 +399,7 @@ func TestHandler_ProcessMessage(t *testing.T) {
 		{
 			name: "handles invalid JSON gracefully",
 			setupHandlers: func(h *Handler) {
-				h.OnJSONMessage(func(c *Client, data interface{}) error {
+				h.OnJSONMessage(func(c *Client, data interface{}, ctx *HandlerContext) error {
 					t.Fatal("OnJSONMessage should not be called with invalid JSON")
 					return nil
 				})
@@ -620,8 +621,8 @@ func TestHandler_ChainedConfiguration(t *testing.T) {
 		WithEncoding(JSON).
 		WithJSONSerializer().
 		WithAuth(MockAuthSuccess).
-		OnConnect(func(c *Client) error { return nil }).
-		OnDisconnect(func(c *Client) error { return nil })
+		OnConnect(func(c *Client, ctx *HandlerContext) error { return nil }).
+		OnDisconnect(func(c *Client, ctx *HandlerContext) error { return nil })
 
 	assert.Equal(t, 500, handler.config.MaxConnections)
 	assert.Equal(t, int64(2048), handler.config.MessageSize)

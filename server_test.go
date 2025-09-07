@@ -538,7 +538,7 @@ func TestServer_EventHandlers(t *testing.T) {
 		{
 			name: "OnConnect handler",
 			setup: func(s *Server) {
-				s.OnConnect(func(c *Client) error { return nil })
+				s.OnConnect(func(c *Client, ctx *HandlerContext) error { return nil })
 			},
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.handlers.OnConnect)
@@ -547,7 +547,7 @@ func TestServer_EventHandlers(t *testing.T) {
 		{
 			name: "OnDisconnect handler",
 			setup: func(s *Server) {
-				s.OnDisconnect(func(c *Client) error { return nil })
+				s.OnDisconnect(func(c *Client, ctx *HandlerContext) error { return nil })
 			},
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.handlers.OnDisconnect)
@@ -556,7 +556,7 @@ func TestServer_EventHandlers(t *testing.T) {
 		{
 			name: "OnMessage handler",
 			setup: func(s *Server) {
-				s.OnMessage(func(c *Client, m *Message) error { return nil })
+				s.OnMessage(func(c *Client, m *Message, ctx *HandlerContext) error { return nil })
 			},
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.handlers.OnMessage)
@@ -565,7 +565,7 @@ func TestServer_EventHandlers(t *testing.T) {
 		{
 			name: "OnRawMessage handler",
 			setup: func(s *Server) {
-				s.OnRawMessage(func(c *Client, data []byte) error { return nil })
+				s.OnRawMessage(func(c *Client, data []byte, ctx *HandlerContext) error { return nil })
 			},
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.handlers.OnRawMessage)
@@ -574,7 +574,7 @@ func TestServer_EventHandlers(t *testing.T) {
 		{
 			name: "OnJSONMessage handler",
 			setup: func(s *Server) {
-				s.OnJSONMessage(func(c *Client, data interface{}) error { return nil })
+				s.OnJSONMessage(func(c *Client, data interface{}, ctx *HandlerContext) error { return nil })
 			},
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.handlers.OnJSONMessage)
@@ -583,7 +583,7 @@ func TestServer_EventHandlers(t *testing.T) {
 		{
 			name: "OnProtobufMessage handler",
 			setup: func(s *Server) {
-				s.OnProtobufMessage(func(c *Client, data interface{}) error { return nil })
+				s.OnProtobufMessage(func(c *Client, data interface{}, ctx *HandlerContext) error { return nil })
 			},
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.handlers.OnProtobufMessage)
@@ -592,7 +592,7 @@ func TestServer_EventHandlers(t *testing.T) {
 		{
 			name: "OnError handler",
 			setup: func(s *Server) {
-				s.OnError(func(c *Client, err error) error { return nil })
+				s.OnError(func(c *Client, err error, ctx *HandlerContext) error { return nil })
 			},
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.handlers.OnError)
@@ -601,7 +601,7 @@ func TestServer_EventHandlers(t *testing.T) {
 		{
 			name: "OnPing handler",
 			setup: func(s *Server) {
-				s.OnPing(func(c *Client) error { return nil })
+				s.OnPing(func(c *Client, ctx *HandlerContext) error { return nil })
 			},
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.handlers.OnPing)
@@ -610,7 +610,7 @@ func TestServer_EventHandlers(t *testing.T) {
 		{
 			name: "OnPong handler",
 			setup: func(s *Server) {
-				s.OnPong(func(c *Client) error { return nil })
+				s.OnPong(func(c *Client, ctx *HandlerContext) error { return nil })
 			},
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.handlers.OnPong)

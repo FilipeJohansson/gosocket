@@ -14,6 +14,14 @@ type IWebSocketConn interface {
 	ReadMessage() (messageType int, p []byte, err error)
 }
 
+type ConnectionInfo struct {
+	ClientIP  string
+	UserAgent string
+	Origin    string
+	Headers   map[string]string
+	RequestID string
+}
+
 func generateClientID() string {
 	return fmt.Sprintf("client_%d", time.Now().UnixNano())
 }
