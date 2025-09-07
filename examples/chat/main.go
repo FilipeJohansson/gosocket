@@ -46,7 +46,6 @@ func main() {
 
 	// Serve static files for the chat frontend
 	http.HandleFunc("/", serveHome)
-	http.HandleFunc("/chat", serveChatPage)
 
 	fmt.Println("Chat server starting...")
 	fmt.Println("Open http://localhost:8080 to access the chat")
@@ -64,20 +63,20 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func handleConnect(client *gosocket.Client) error {
+func handleConnect(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 	fmt.Printf("Client connected: %s\n", client.ID)
 
 	// Send welcome message
 	welcome := ChatMessage{
 		Type:      MsgTypeNotification,
-		Message:   "Welcome to GoSocket Chat! Type /join <room> to join a room.",
+		Message:   "Welcome to GoSocket Chat! Set your name and join a room!",
 		Timestamp: time.Now(),
 	}
 
 	return client.SendJSON(welcome)
 }
 
-func handleDisconnect(client *gosocket.Client) error {
+func handleDisconnect(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 	fmt.Printf("Client disconnected: %s\n", client.ID)
 
 	// Get user data
@@ -100,17 +99,14 @@ func handleDisconnect(client *gosocket.Client) error {
 			Timestamp: time.Now(),
 		}
 
-		// Broadcast to room (you'll need to implement this in your server)
-		if server, ok := getServerFromClient(client); ok {
-			server.BroadcastToRoomJSON(room, leaveMsg)
-			broadcastUserList(server, room)
-		}
+		ctx.BroadcastJSONToRoom(room, leaveMsg)
+		broadcastUserList(ctx, room)
 	}
 
 	return nil
 }
 
-func handleMessage(client *gosocket.Client, data interface{}) error {
+func handleMessage(client *gosocket.Client, data interface{}, ctx *gosocket.HandlerContext) error {
 	// Parse the JSON message
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {
@@ -126,17 +122,17 @@ func handleMessage(client *gosocket.Client, data interface{}) error {
 
 	switch msg.Type {
 	case MsgTypeJoin:
-		return handleJoinRoom(client, &msg)
+		return handleJoinRoom(client, &msg, ctx)
 	case MsgTypeLeave:
-		return handleLeaveRoom(client, &msg)
+		return handleLeaveRoom(client, &msg, ctx)
 	case MsgTypeChat:
-		return handleChatMessage(client, &msg)
+		return handleChatMessage(client, &msg, ctx)
 	default:
 		return sendErrorMessage(client, "Unknown message type")
 	}
 }
 
-func handleJoinRoom(client *gosocket.Client, msg *ChatMessage) error {
+func handleJoinRoom(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.HandlerContext) error {
 	if msg.Room == "" || msg.User == "" {
 		return sendErrorMessage(client, "Room and username are required")
 	}
@@ -174,15 +170,13 @@ func handleJoinRoom(client *gosocket.Client, msg *ChatMessage) error {
 	}
 
 	// Broadcast to room
-	if server, ok := getServerFromClient(client); ok {
-		server.BroadcastToRoomJSON(msg.Room, joinNotify)
-		broadcastUserList(server, msg.Room)
-	}
+	ctx.BroadcastJSONToRoom(msg.Room, joinNotify)
+	broadcastUserList(ctx, msg.Room)
 
 	return nil
 }
 
-func handleLeaveRoom(client *gosocket.Client, msg *ChatMessage) error {
+func handleLeaveRoom(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.HandlerContext) error {
 	username := getUsernameFromClient(client)
 	if username == "" {
 		return sendErrorMessage(client, "You must set a username first")
@@ -217,15 +211,13 @@ func handleLeaveRoom(client *gosocket.Client, msg *ChatMessage) error {
 	}
 
 	// Broadcast to room
-	if server, ok := getServerFromClient(client); ok {
-		server.BroadcastToRoomJSON(msg.Room, leaveNotify)
-		broadcastUserList(server, msg.Room)
-	}
+	ctx.BroadcastJSONToRoom(msg.Room, leaveNotify)
+	broadcastUserList(ctx, msg.Room)
 
 	return nil
 }
 
-func handleChatMessage(client *gosocket.Client, msg *ChatMessage) error {
+func handleChatMessage(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.HandlerContext) error {
 	username := getUsernameFromClient(client)
 	if username == "" {
 		return sendErrorMessage(client, "You must join a room first")
@@ -259,15 +251,13 @@ func handleChatMessage(client *gosocket.Client, msg *ChatMessage) error {
 	}
 
 	// Broadcast to room
-	if server, ok := getServerFromClient(client); ok {
-		server.BroadcastToRoomJSON(msg.Room, chatMsg)
-	}
+	ctx.BroadcastJSONToRoom(msg.Room, chatMsg)
 
 	return nil
 }
 
-func broadcastUserList(server *gosocket.Server, room string) {
-	clients := server.GetClientsInRoom(room)
+func broadcastUserList(ctx *gosocket.HandlerContext, room string) {
+	clients := ctx.GetClientsInRoom(room)
 	var users []string
 
 	for _, client := range clients {
@@ -283,7 +273,7 @@ func broadcastUserList(server *gosocket.Server, room string) {
 		Timestamp: time.Now(),
 	}
 
-	server.BroadcastToRoomJSON(room, userListMsg)
+	ctx.BroadcastJSONToRoom(room, userListMsg)
 }
 
 func sendErrorMessage(client *gosocket.Client, message string) error {
@@ -302,13 +292,6 @@ func getUsernameFromClient(client *gosocket.Client) string {
 		}
 	}
 	return ""
-}
-
-func getServerFromClient(client *gosocket.Client) (*gosocket.Server, bool) {
-	// This is a workaround - in a real implementation, you'd want to
-	// store the server reference in the client or use a global variable
-	// For now, return nil as this is just an example
-	return nil, false
 }
 
 func serveHome(w http.ResponseWriter, r *http.Request) {
@@ -519,9 +502,4 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(html))
-}
-
-func serveChatPage(w http.ResponseWriter, r *http.Request) {
-	// Redirect to home for now
-	http.Redirect(w, r, "/", http.StatusFound)
 }
