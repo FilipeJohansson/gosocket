@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"sync"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
 // IServer defines the interface for a server that can manage client connections,
@@ -472,7 +470,7 @@ func (s *Server) Start() error {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc(s.config.Path, s.handleWebSocket)
+	mux.HandleFunc(s.config.Path, s.handler.HandleWebSocket)
 
 	var handler http.Handler = mux
 	handler = s.handler.ApplyMiddlewares(handler)
@@ -543,7 +541,7 @@ func (s *Server) StartWithContext(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc(s.config.Path, s.handleWebSocket)
+	mux.HandleFunc(s.config.Path, s.handler.HandleWebSocket)
 
 	var handler http.Handler = mux
 	handler = s.handler.ApplyMiddlewares(handler)
@@ -936,198 +934,4 @@ func (s *Server) LeaveRoom(clientID, room string) error {
 	}
 
 	return client.LeaveRoom(room)
-}
-
-// handleWebSocket is the HTTP handler that is registered for the WebSocket endpoint. It upgrades the connection to a WebSocket connection,
-// authenticates the user using the authFunc, and then adds the client to the hub and starts the client's read and write goroutines.
-// It also calls the OnConnect handler if it is set.
-//
-// This method is safe to call concurrently.
-func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	upgrader := websocket.Upgrader{
-		ReadBufferSize:  1024,
-		WriteBufferSize: 1024,
-		CheckOrigin: func(r *http.Request) bool {
-			if len(s.handler.config.AllowedOrigins) == 0 {
-				return s.config.EnableCORS
-			}
-
-			origin := r.Header.Get("Origin")
-			for _, allowed := range s.handler.config.AllowedOrigins {
-				if origin == allowed {
-					return true
-				}
-			}
-			return false
-		},
-	}
-
-	var userData map[string]interface{}
-	if s.handler.authFunc != nil {
-		var err error
-		userData, err = s.handler.authFunc(r)
-		if err != nil {
-			http.Error(w, "Authentication failed: "+err.Error(), http.StatusUnauthorized)
-			return
-		}
-	}
-
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		if s.handler.handlers.OnError != nil {
-			s.handler.handlers.OnError(nil, fmt.Errorf("websocket upgrade failed: %w", err))
-		}
-		return
-	}
-
-	clientId := generateClientID()
-	client := NewClient(clientId, conn, s.handler.hub)
-
-	for key, value := range userData {
-		client.SetUserData(key, value)
-	}
-
-	conn.SetReadLimit(s.handler.config.MessageSize)
-	conn.SetReadDeadline(time.Now().Add(s.handler.config.PongWait))
-	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(s.handler.config.PongWait))
-		if s.handler.handlers.OnPong != nil {
-			s.handler.handlers.OnPong(client)
-		}
-		return nil
-	})
-
-	s.handler.hub.AddClient(client)
-
-	if s.handler.handlers.OnConnect != nil {
-		s.handler.handlers.OnConnect(client)
-	}
-
-	go s.handleClientWrite(client)
-	go s.handleClientRead(client)
-}
-
-// handleClientWrite is a goroutine that writes messages to a client. It reads
-// from the client's MessageChan and writes to the client's websocket connection.
-// If the MessageChan is closed, it sends a CloseMessage to the client and
-// returns. It also sends a PingMessage every s.handler.config.PingPeriod to the
-// client. If the client's websocket connection is closed or an error occurs when
-// writing to the client, it calls s.handler.handlers.OnError if it is not nil.
-func (s *Server) handleClientWrite(client *Client) {
-	ticker := time.NewTicker(s.handler.config.PingPeriod)
-	defer func() {
-		ticker.Stop()
-		client.Conn.(*websocket.Conn).Close()
-	}()
-
-	conn := client.Conn.(*websocket.Conn)
-
-	for {
-		select {
-		case message, ok := <-client.MessageChan:
-			conn.SetWriteDeadline(time.Now().Add(s.handler.config.WriteTimeout))
-			if !ok {
-				conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-
-			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				if s.handler.handlers.OnError != nil {
-					s.handler.handlers.OnError(client, err)
-				}
-				return
-			}
-
-		case <-ticker.C:
-			conn.SetWriteDeadline(time.Now().Add(s.handler.config.WriteTimeout))
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				return
-			}
-
-			if s.handler.handlers.OnPing != nil {
-				s.handler.handlers.OnPing(client)
-			}
-		}
-	}
-}
-
-// handleClientRead is a goroutine that reads messages from a client. It reads
-// from the client's websocket connection and processes the messages. If the
-// client's websocket connection is closed or an error occurs when reading from
-// the client, it calls s.handler.handlers.OnError if it is not nil and
-// s.handler.handlers.OnDisconnect when the client is done.
-func (s *Server) handleClientRead(client *Client) {
-	defer func() {
-		s.handler.hub.RemoveClient(client)
-		client.Conn.(*websocket.Conn).Close()
-
-		if s.handler.handlers.OnDisconnect != nil {
-			s.handler.handlers.OnDisconnect(client)
-		}
-	}()
-
-	conn := client.Conn.(*websocket.Conn)
-
-	for {
-		messageType, data, err := conn.ReadMessage()
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				if s.handler.handlers.OnError != nil {
-					s.handler.handlers.OnError(client, err)
-				}
-			}
-			break
-		}
-
-		conn.SetReadDeadline(time.Now().Add(s.handler.config.PongWait)) // reset read deadline
-
-		message := &Message{
-			Type:    MessageType(messageType),
-			RawData: data,
-			From:    client.ID,
-			Created: time.Now(),
-		}
-
-		s.processMessage(client, message)
-	}
-}
-
-// processMessage is a helper function that processes a message from a client.
-// It first calls the OnMessage handler if it is not nil. If the OnMessage handler
-// returns an error, it calls the OnError handler if it is not nil. Then, it
-// calls the OnRawMessage handler if it is not nil. If the OnRawMessage handler
-// returns an error, it calls the OnError handler if it is not nil. Finally, it
-// calls the OnJSONMessage handler if it is not nil, unmarshals the message data
-// to JSON, and passes the unmarshaled data to the handler. If the OnJSONMessage
-// handler returns an error, it calls the OnError handler if it is not nil.
-func (s *Server) processMessage(client *Client, message *Message) {
-	if s.handler.handlers.OnMessage != nil {
-		if err := s.handler.handlers.OnMessage(client, message); err != nil {
-			if s.handler.handlers.OnError != nil {
-				s.handler.handlers.OnError(client, err)
-			}
-		}
-	}
-
-	if s.handler.handlers.OnRawMessage != nil {
-		if err := s.handler.handlers.OnRawMessage(client, message.RawData); err != nil {
-			if s.handler.handlers.OnError != nil {
-				s.handler.handlers.OnError(client, err)
-			}
-		}
-	}
-
-	if s.handler.handlers.OnJSONMessage != nil {
-		var jsonData interface{}
-		if err := json.Unmarshal(message.RawData, &jsonData); err == nil {
-			message.Data = jsonData
-			message.Encoding = JSON
-			if err := s.handler.handlers.OnJSONMessage(client, jsonData); err != nil {
-				if s.handler.handlers.OnError != nil {
-					s.handler.handlers.OnError(client, err)
-				}
-			}
-		}
-	}
-	// TODO: add Protobuf and other formats
 }

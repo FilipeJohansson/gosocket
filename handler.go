@@ -303,7 +303,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if len(h.middlewares) > 0 {
 		wsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			h.handleWebSocket(w, r)
+			h.HandleWebSocket(w, r)
 		})
 
 		// apply middlewares and run
@@ -311,7 +311,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		finalHandler.ServeHTTP(w, r)
 	} else {
 		// no middlewares, just run directly
-		h.handleWebSocket(w, r)
+		h.HandleWebSocket(w, r)
 	}
 }
 
@@ -331,12 +331,12 @@ func (h *Handler) ApplyMiddlewares(handler http.Handler) http.Handler {
 	return finalHandler
 }
 
-// handleWebSocket is the HTTP handler that is registered for the WebSocket endpoint. It upgrades the connection to a WebSocket connection,
+// HandleWebSocket is the HTTP handler that is registered for the WebSocket endpoint. It upgrades the connection to a WebSocket connection,
 // authenticates the user using the authFunc, and then adds the client to the hub and starts the client's read and write goroutines.
 // It also calls the OnConnect handler if it is set.
 //
 // This method is safe to call concurrently.
-func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if h.upgrader.CheckOrigin == nil {
 		h.upgrader.CheckOrigin = func(r *http.Request) bool {
 			if len(h.config.AllowedOrigins) == 0 {
