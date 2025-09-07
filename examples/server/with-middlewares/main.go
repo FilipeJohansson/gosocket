@@ -17,7 +17,7 @@ func main() {
 		WithPath("/ws").
 		WithMiddleware(LoggingMiddleware).
 		WithMiddleware(AuthMiddleware).
-		OnConnect(func(client *gosocket.Client) error {
+		OnConnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 			fmt.Printf("Client connected: %s\n", client.ID)
 			return nil
 		})
