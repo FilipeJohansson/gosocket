@@ -9,16 +9,18 @@ import (
 	"time"
 
 	"github.com/FilipeJohansson/gosocket"
+	"github.com/FilipeJohansson/gosocket/handler"
 )
 
 func main() {
-	handler := gosocket.NewHandler().
-		WithMiddleware(LoggingMiddleware).
-		WithMiddleware(AuthMiddleware).
-		OnConnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
+	handler := handler.NewHandler(
+		handler.WithMiddleware(LoggingMiddleware),
+		handler.WithMiddleware(AuthMiddleware),
+		handler.OnConnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
 			fmt.Printf("Client connected: %s\n", client.ID)
 			return nil
-		})
+		}),
+	)
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", handler) // middlewares applied automatically

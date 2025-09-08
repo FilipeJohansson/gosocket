@@ -9,18 +9,21 @@ import (
 	"time"
 
 	"github.com/FilipeJohansson/gosocket"
+	"github.com/FilipeJohansson/gosocket/handler"
+	"github.com/FilipeJohansson/gosocket/server"
 )
 
 func main() {
-	server := gosocket.NewServer().
-		WithPort(8080).
-		WithPath("/ws").
-		WithMiddleware(LoggingMiddleware).
-		WithMiddleware(AuthMiddleware).
-		OnConnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
+	server := server.NewServer(
+		server.WithPort(8080),
+		server.WithPath("/ws"),
+		server.WithMiddleware(LoggingMiddleware),
+		server.WithMiddleware(AuthMiddleware),
+		server.OnConnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
 			fmt.Printf("Client connected: %s\n", client.ID)
 			return nil
-		})
+		}),
+	)
 
 	log.Fatal(server.Start())
 }

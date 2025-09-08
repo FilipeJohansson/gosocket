@@ -22,6 +22,6 @@ type ConnectionInfo struct {
 	RequestID string
 }
 
-func generateClientID() string {
+func GenerateClientID() string {
 	return fmt.Sprintf("client_%d", time.Now().UnixNano())
 }

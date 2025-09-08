@@ -1,21 +1,187 @@
-package gosocket
+package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/FilipeJohansson/gosocket"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
+
+type MockWebSocketConn struct {
+	mock.Mock
+	closed bool
+}
+
+func (m *MockWebSocketConn) Close() error {
+	args := m.Called()
+	m.closed = true
+	return args.Error(0)
+}
+
+func (m *MockWebSocketConn) WriteMessage(messageType int, data []byte) error {
+	args := m.Called(messageType, data)
+	return args.Error(0)
+}
+
+func (m *MockWebSocketConn) ReadMessage() (messageType int, p []byte, err error) {
+	args := m.Called()
+	return args.Int(0), args.Get(1).([]byte), args.Error(2)
+}
 
 func MockAuthSuccess(r *http.Request) (map[string]interface{}, error) {
 	return map[string]interface{}{
 		"user_id": "123",
 		"role":    "admin",
 	}, nil
+}
+
+// MockHub implements a mock Hub for testing
+type MockHub struct {
+	mock.Mock
+	Clients    map[*gosocket.Client]bool
+	Rooms      map[string]map[*gosocket.Client]bool
+	Register   chan *gosocket.Client
+	Unregister chan *gosocket.Client
+	Broadcast  chan *gosocket.Message
+	mu         sync.RWMutex
+	running    bool
+}
+
+func NewMockHub() *MockHub {
+	return &MockHub{
+		Rooms: make(map[string]map[*gosocket.Client]bool),
+	}
+}
+
+func (m *MockHub) Run() {
+	m.Called()
+}
+
+func (m *MockHub) Stop() {
+	m.Called()
+}
+
+func (m *MockHub) AddClient(client *gosocket.Client) {
+	m.Called(client)
+}
+
+func (m *MockHub) RemoveClient(client *gosocket.Client) {
+	m.Called(client)
+}
+
+func (m *MockHub) BroadcastMessage(message *gosocket.Message) {
+	m.Called(message)
+}
+
+func (m *MockHub) BroadcastToRoom(room string, message *gosocket.Message) {
+	m.Called(room, message)
+}
+
+func (m *MockHub) CreateRoom(name string) error {
+	m.Called(name)
+	if name == "" {
+		return fmt.Errorf("room name cannot be empty")
+	}
+
+	m.mu.Lock()
+	if m.Rooms[name] == nil {
+		m.Rooms[name] = make(map[*gosocket.Client]bool)
+	}
+	m.mu.Unlock()
+
+	return nil
+}
+
+func (m *MockHub) JoinRoom(client *gosocket.Client, room string) {
+	m.Called(client, room)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.Rooms[room] == nil {
+		m.Rooms[room] = make(map[*gosocket.Client]bool)
+	}
+	m.Rooms[room][client] = true
+}
+
+func (m *MockHub) LeaveRoom(client *gosocket.Client, room string) {
+	m.Called(client, room)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if roomClients, exists := m.Rooms[room]; exists {
+		delete(roomClients, client)
+		if len(roomClients) == 0 {
+			delete(m.Rooms, room)
+		}
+	}
+}
+
+func (m *MockHub) GetRoomClients(room string) []*gosocket.Client {
+	m.Called(room)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	clients := []*gosocket.Client{}
+	if roomClients, exists := m.Rooms[room]; exists {
+		for client := range roomClients {
+			clients = append(clients, client)
+		}
+	}
+	return clients
+}
+
+func (m *MockHub) GetStats() map[string]interface{} {
+	args := m.Called()
+	return args.Get(0).(map[string]interface{})
+}
+
+func (m *MockHub) GetClients() map[*gosocket.Client]bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	clientsCopy := make(map[*gosocket.Client]bool)
+	for client, value := range m.Clients {
+		clientsCopy[client] = value
+	}
+	return clientsCopy
+}
+
+func (m *MockHub) GetRooms() map[string]map[*gosocket.Client]bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	roomsCopy := make(map[string]map[*gosocket.Client]bool)
+	for room, clients := range m.Rooms {
+		clientsCopy := make(map[*gosocket.Client]bool)
+		for client, value := range clients {
+			clientsCopy[client] = value
+		}
+		roomsCopy[room] = clientsCopy
+	}
+	return roomsCopy
+}
+
+func (m *MockHub) DeleteRoom(name string) error {
+	m.Called(name)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if roomClients, exists := m.Rooms[name]; exists {
+		// first, remove all clients from the room
+		for client := range roomClients {
+			delete(roomClients, client)
+		}
+		delete(m.Rooms, name)
+		return nil
+	}
+
+	return fmt.Errorf("room not found: %s", name)
+}
+
+func (m *MockHub) IsRunning() bool {
+	return m.running
 }
 
 func MockAuthFailure(r *http.Request) (map[string]interface{}, error) {
@@ -48,7 +214,7 @@ func TestNewHandler(t *testing.T) {
 	assert.Equal(t, 1024, handler.upgrader.WriteBufferSize)
 }
 
-func TestHandler_FluentInterface_MaxConnections(t *testing.T) {
+func TestHandler_MaxConnections(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    int
@@ -73,13 +239,13 @@ func TestHandler_FluentInterface_MaxConnections(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler().WithMaxConnections(tt.input)
+			handler := NewHandler(WithMaxConnections(tt.input))
 			assert.Equal(t, tt.expected, handler.config.MaxConnections)
 		})
 	}
 }
 
-func TestHandler_FluentInterface_MessageSize(t *testing.T) {
+func TestHandler_MessageSize(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    int64
@@ -104,13 +270,13 @@ func TestHandler_FluentInterface_MessageSize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler().WithMessageSize(tt.input)
+			handler := NewHandler(WithMessageSize(tt.input))
 			assert.Equal(t, tt.expected, handler.config.MessageSize)
 		})
 	}
 }
 
-func TestHandler_FluentInterface_Timeout(t *testing.T) {
+func TestHandler_Timeout(t *testing.T) {
 	tests := []struct {
 		name          string
 		read          time.Duration
@@ -136,14 +302,14 @@ func TestHandler_FluentInterface_Timeout(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler().WithTimeout(tt.read, tt.write)
+			handler := NewHandler(WithTimeout(tt.read, tt.write))
 			assert.Equal(t, tt.expectedRead, handler.config.ReadTimeout)
 			assert.Equal(t, tt.expectedWrite, handler.config.WriteTimeout)
 		})
 	}
 }
 
-func TestHandler_FluentInterface_PingPong(t *testing.T) {
+func TestHandler_PingPong(t *testing.T) {
 	tests := []struct {
 		name               string
 		pingPeriod         time.Duration
@@ -169,63 +335,55 @@ func TestHandler_FluentInterface_PingPong(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler().WithPingPong(tt.pingPeriod, tt.pongWait)
+			handler := NewHandler(WithPingPong(tt.pingPeriod, tt.pongWait))
 			assert.Equal(t, tt.expectedPingPeriod, handler.config.PingPeriod)
 			assert.Equal(t, tt.expectedPongWait, handler.config.PongWait)
 		})
 	}
 }
 
-func TestHandler_FluentInterface_AllowedOrigins(t *testing.T) {
+func TestHandler_AllowedOrigins(t *testing.T) {
 	origins := []string{"http://localhost:3000", "https://example.com"}
-	handler := NewHandler().WithAllowedOrigins(origins)
+	handler := NewHandler(WithAllowedOrigins(origins))
 
 	assert.Equal(t, origins, handler.config.AllowedOrigins)
 }
 
-func TestHandler_FluentInterface_Encoding(t *testing.T) {
-	handler := NewHandler().WithEncoding(Protobuf)
-	assert.Equal(t, Protobuf, handler.config.DefaultEncoding)
+func TestHandler_Encoding(t *testing.T) {
+	handler := NewHandler(WithEncoding(gosocket.Protobuf))
+	assert.Equal(t, gosocket.Protobuf, handler.config.DefaultEncoding)
 }
 
-func TestHandler_FluentInterface_Serializers(t *testing.T) {
+func TestHandler_Serializers(t *testing.T) {
 	tests := []struct {
 		name       string
 		setup      func(*Handler)
-		serializer EncodingType
+		serializer gosocket.EncodingType
 		wantType   interface{}
 	}{
 		{
-			name: "WithSerializer",
-			setup: func(h *Handler) {
-				h.WithSerializer(JSON, JSONSerializer{})
-			},
-			serializer: JSON,
-			wantType:   JSONSerializer{},
+			name:       "WithSerializer",
+			setup:      WithSerializer(gosocket.JSON, gosocket.JSONSerializer{}),
+			serializer: gosocket.JSON,
+			wantType:   gosocket.JSONSerializer{},
 		},
 		{
-			name: "WithJSONSerializer",
-			setup: func(h *Handler) {
-				h.WithJSONSerializer()
-			},
-			serializer: JSON,
-			wantType:   JSONSerializer{},
+			name:       "WithJSONSerializer",
+			setup:      WithJSONSerializer(),
+			serializer: gosocket.JSON,
+			wantType:   gosocket.JSONSerializer{},
 		},
 		{
-			name: "WithProtobufSerializer",
-			setup: func(h *Handler) {
-				h.WithProtobufSerializer()
-			},
-			serializer: Protobuf,
-			wantType:   ProtobufSerializer{},
+			name:       "WithProtobufSerializer",
+			setup:      WithProtobufSerializer(),
+			serializer: gosocket.Protobuf,
+			wantType:   gosocket.ProtobufSerializer{},
 		},
 		{
-			name: "WithRawSerializer",
-			setup: func(h *Handler) {
-				h.WithRawSerializer()
-			},
-			serializer: Raw,
-			wantType:   RawSerializer{},
+			name:       "WithRawSerializer",
+			setup:      WithRawSerializer(),
+			serializer: gosocket.Raw,
+			wantType:   gosocket.RawSerializer{},
 		},
 	}
 
@@ -239,21 +397,26 @@ func TestHandler_FluentInterface_Serializers(t *testing.T) {
 	}
 }
 
-func TestHandler_FluentInterface_Middleware(t *testing.T) {
+func TestHandler_Middleware(t *testing.T) {
 	handler := NewHandler()
 
-	// Inicialmente deve estar vazio
+	// no middlewares
 	assert.Nil(t, handler.middlewares)
 
-	handler.WithMiddleware(MockMiddleware1)
+	// one middleware
+	handler = NewHandler(WithMiddleware(MockMiddleware1))
 	assert.Len(t, handler.middlewares, 1)
 
-	handler.WithMiddleware(MockMiddleware2)
+	// multiple middlewares
+	handler = NewHandler(
+		WithMiddleware(MockMiddleware1),
+		WithMiddleware(MockMiddleware2),
+	)
 	assert.Len(t, handler.middlewares, 2)
 }
 
-func TestHandler_FluentInterface_Auth(t *testing.T) {
-	handler := NewHandler().WithAuth(MockAuthSuccess)
+func TestHandler_Auth(t *testing.T) {
+	handler := NewHandler(WithAuth(MockAuthSuccess))
 	assert.NotNil(t, handler.authFunc)
 
 	// test that auth function works
@@ -274,39 +437,40 @@ func TestHandler_EventHandlers(t *testing.T) {
 		pongCalled        bool
 	)
 
-	handler := NewHandler().
-		OnConnect(func(c *Client, ctx *HandlerContext) error {
+	handler := NewHandler(
+		OnConnect(func(c *gosocket.Client, ctx *HandlerContext) error {
 			connectCalled = true
 			return nil
-		}).
-		OnDisconnect(func(c *Client, ctx *HandlerContext) error {
+		}),
+		OnDisconnect(func(c *gosocket.Client, ctx *HandlerContext) error {
 			disconnectCalled = true
 			return nil
-		}).
-		OnMessage(func(c *Client, m *Message, ctx *HandlerContext) error {
+		}),
+		OnMessage(func(c *gosocket.Client, m *gosocket.Message, ctx *HandlerContext) error {
 			messageCalled = true
 			return nil
-		}).
-		OnRawMessage(func(c *Client, data []byte, ctx *HandlerContext) error {
+		}),
+		OnRawMessage(func(c *gosocket.Client, data []byte, ctx *HandlerContext) error {
 			rawMessageCalled = true
 			return nil
-		}).
-		OnJSONMessage(func(c *Client, data interface{}, ctx *HandlerContext) error {
+		}),
+		OnJSONMessage(func(c *gosocket.Client, data interface{}, ctx *HandlerContext) error {
 			jsonMessageCalled = true
 			return nil
-		}).
-		OnError(func(c *Client, err error, ctx *HandlerContext) error {
+		}),
+		OnError(func(c *gosocket.Client, err error, ctx *HandlerContext) error {
 			errorCalled = true
 			return nil
-		}).
-		OnPing(func(c *Client, ctx *HandlerContext) error {
+		}),
+		OnPing(func(c *gosocket.Client, ctx *HandlerContext) error {
 			pingCalled = true
 			return nil
-		}).
-		OnPong(func(c *Client, ctx *HandlerContext) error {
+		}),
+		OnPong(func(c *gosocket.Client, ctx *HandlerContext) error {
 			pongCalled = true
 			return nil
-		})
+		}),
+	)
 
 	assert.NotNil(t, handler.handlers.OnConnect)
 	assert.NotNil(t, handler.handlers.OnDisconnect)
@@ -318,8 +482,8 @@ func TestHandler_EventHandlers(t *testing.T) {
 	assert.NotNil(t, handler.handlers.OnPong)
 
 	// test that handlers can be called
-	client := NewClient("test", &MockWebSocketConn{}, NewHub())
-	message := NewMessage(TextMessage, "test")
+	client := gosocket.NewClient("test", &MockWebSocketConn{}, gosocket.NewHub())
+	message := gosocket.NewMessage(gosocket.TextMessage, "test")
 	ctx := NewHandlerContext(handler)
 
 	handler.handlers.OnConnect(client, ctx)
@@ -344,8 +508,8 @@ func TestHandler_EventHandlers(t *testing.T) {
 func TestHandler_ProcessMessage(t *testing.T) {
 	tests := []struct {
 		name            string
-		setupHandlers   func(*Handler)
-		message         *Message
+		setupHandlers   []func(*Handler)
+		message         *gosocket.Message
 		expectOnMessage bool
 		expectOnRaw     bool
 		expectOnJSON    bool
@@ -353,58 +517,58 @@ func TestHandler_ProcessMessage(t *testing.T) {
 	}{
 		{
 			name: "processes message with OnMessage handler",
-			setupHandlers: func(h *Handler) {
-				h.OnMessage(func(c *Client, m *Message, ctx *HandlerContext) error {
+			setupHandlers: []func(*Handler){
+				OnMessage(func(c *gosocket.Client, m *gosocket.Message, ctx *HandlerContext) error {
 					return nil
-				})
+				}),
 			},
-			message:         NewRawMessage(TextMessage, []byte("test")),
+			message:         gosocket.NewRawMessage(gosocket.TextMessage, []byte("test")),
 			expectOnMessage: true,
 		},
 		{
 			name: "processes message with OnRawMessage handler",
-			setupHandlers: func(h *Handler) {
-				h.OnRawMessage(func(c *Client, data []byte, ctx *HandlerContext) error {
+			setupHandlers: []func(*Handler){
+				OnRawMessage(func(c *gosocket.Client, data []byte, ctx *HandlerContext) error {
 					return nil
-				})
+				}),
 			},
-			message:     NewRawMessage(TextMessage, []byte("test")),
+			message:     gosocket.NewRawMessage(gosocket.TextMessage, []byte("test")),
 			expectOnRaw: true,
 		},
 		{
 			name: "processes JSON message with OnJSONMessage handler",
-			setupHandlers: func(h *Handler) {
-				h.OnJSONMessage(func(c *Client, data interface{}, ctx *HandlerContext) error {
+			setupHandlers: []func(*Handler){
+				OnJSONMessage(func(c *gosocket.Client, data interface{}, ctx *HandlerContext) error {
 					return nil
-				})
+				}),
 			},
-			message:      NewRawMessage(TextMessage, []byte(`{"key":"value"}`)),
+			message:      gosocket.NewRawMessage(gosocket.TextMessage, []byte(`{"key":"value"}`)),
 			expectOnJSON: true,
 		},
 		{
 			name: "handles error in OnMessage handler",
-			setupHandlers: func(h *Handler) {
-				h.OnMessage(func(c *Client, m *Message, ctx *HandlerContext) error {
+			setupHandlers: []func(*Handler){
+				OnMessage(func(c *gosocket.Client, m *gosocket.Message, ctx *HandlerContext) error {
 					return errors.New("handler error")
-				})
-				h.OnError(func(c *Client, err error, ctx *HandlerContext) error {
+				}),
+				OnError(func(c *gosocket.Client, err error, ctx *HandlerContext) error {
 					assert.Contains(t, err.Error(), "handler error")
 					return nil
-				})
+				}),
 			},
-			message:         NewRawMessage(TextMessage, []byte("test")),
+			message:         gosocket.NewRawMessage(gosocket.TextMessage, []byte("test")),
 			expectOnMessage: true,
 			expectError:     true,
 		},
 		{
 			name: "handles invalid JSON gracefully",
-			setupHandlers: func(h *Handler) {
-				h.OnJSONMessage(func(c *Client, data interface{}, ctx *HandlerContext) error {
+			setupHandlers: []func(*Handler){
+				OnJSONMessage(func(c *gosocket.Client, data interface{}, ctx *HandlerContext) error {
 					t.Fatal("OnJSONMessage should not be called with invalid JSON")
 					return nil
-				})
+				}),
 			},
-			message:      NewRawMessage(TextMessage, []byte("invalid json")),
+			message:      gosocket.NewRawMessage(gosocket.TextMessage, []byte("invalid json")),
 			expectOnJSON: false,
 		},
 	}
@@ -412,9 +576,11 @@ func TestHandler_ProcessMessage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler := NewHandler()
-			tt.setupHandlers(handler)
+			for _, setup := range tt.setupHandlers {
+				setup(handler)
+			}
 
-			client := NewClient("test", &MockWebSocketConn{}, NewHub())
+			client := gosocket.NewClient("test", &MockWebSocketConn{}, gosocket.NewHub())
 			handler.processMessage(client, tt.message)
 
 			// process is asynchronous, so we might need a small delay
@@ -477,7 +643,7 @@ func TestHandler_ServeHTTP_OriginCheck(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler().WithAllowedOrigins(tt.allowedOrigins)
+			handler := NewHandler(WithAllowedOrigins(tt.allowedOrigins))
 
 			req := httptest.NewRequest("GET", "/ws", nil)
 			req.Header.Set("Connection", "upgrade")
@@ -543,7 +709,7 @@ func TestHandler_AuthenticationIntegration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler().WithAuth(tt.authFunc)
+			handler := NewHandler(WithAuth(tt.authFunc))
 			req := httptest.NewRequest("GET", "/ws", nil)
 			for k, v := range tt.header {
 				req.Header.Set(k, v)
@@ -574,10 +740,12 @@ func TestHandler_ConcurrentAccess(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 
-			handler.WithMaxConnections(id * 100).
-				WithMessageSize(int64(id * 1024)).
-				WithEncoding(JSON).
-				WithJSONSerializer()
+			handler = NewHandler(
+				WithMaxConnections(id*100),
+				WithMessageSize(int64(id*1024)),
+				WithEncoding(gosocket.JSON),
+				WithJSONSerializer(),
+			)
 		}(i)
 	}
 
@@ -599,7 +767,7 @@ func TestHandler_ConcurrentAccess(t *testing.T) {
 }
 
 func TestHandler_DefaultConfig(t *testing.T) {
-	config := DefaultHandlerConfig()
+	config := gosocket.DefaultHandlerConfig()
 
 	assert.Equal(t, 1000, config.MaxConnections)
 	assert.Equal(t, int64(512), config.MessageSize)
@@ -607,22 +775,23 @@ func TestHandler_DefaultConfig(t *testing.T) {
 	assert.Equal(t, 10*time.Second, config.WriteTimeout)
 	assert.Equal(t, 54*time.Second, config.PingPeriod)
 	assert.Equal(t, 60*time.Second, config.PongWait)
-	assert.Equal(t, JSON, config.DefaultEncoding)
+	assert.Equal(t, gosocket.JSON, config.DefaultEncoding)
 }
 
 func TestHandler_ChainedConfiguration(t *testing.T) {
-	// test that fluent interface returns the same handler instance
-	handler := NewHandler().
-		WithMaxConnections(500).
-		WithMessageSize(2048).
-		WithTimeout(30*time.Second, 15*time.Second).
-		WithPingPong(45*time.Second, 50*time.Second).
-		WithAllowedOrigins([]string{"http://localhost:3000"}).
-		WithEncoding(JSON).
-		WithJSONSerializer().
-		WithAuth(MockAuthSuccess).
-		OnConnect(func(c *Client, ctx *HandlerContext) error { return nil }).
-		OnDisconnect(func(c *Client, ctx *HandlerContext) error { return nil })
+	// test that chained configuration returns the same handler instance
+	handler := NewHandler(
+		WithMaxConnections(500),
+		WithMessageSize(2048),
+		WithTimeout(30*time.Second, 15*time.Second),
+		WithPingPong(45*time.Second, 50*time.Second),
+		WithAllowedOrigins([]string{"http://localhost:3000"}),
+		WithEncoding(gosocket.JSON),
+		WithJSONSerializer(),
+		WithAuth(MockAuthSuccess),
+		OnConnect(func(c *gosocket.Client, ctx *HandlerContext) error { return nil }),
+		OnDisconnect(func(c *gosocket.Client, ctx *HandlerContext) error { return nil }),
+	)
 
 	assert.Equal(t, 500, handler.config.MaxConnections)
 	assert.Equal(t, int64(2048), handler.config.MessageSize)
@@ -631,8 +800,8 @@ func TestHandler_ChainedConfiguration(t *testing.T) {
 	assert.Equal(t, 45*time.Second, handler.config.PingPeriod)
 	assert.Equal(t, 50*time.Second, handler.config.PongWait)
 	assert.Equal(t, []string{"http://localhost:3000"}, handler.config.AllowedOrigins)
-	assert.Equal(t, JSON, handler.config.DefaultEncoding)
-	assert.NotNil(t, handler.serializers[JSON])
+	assert.Equal(t, gosocket.JSON, handler.config.DefaultEncoding)
+	assert.NotNil(t, handler.serializers[gosocket.JSON])
 	assert.NotNil(t, handler.authFunc)
 	assert.NotNil(t, handler.handlers.OnConnect)
 	assert.NotNil(t, handler.handlers.OnDisconnect)
