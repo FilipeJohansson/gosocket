@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	handler := handler.NewHandler(
+	handler := handler.New(
 		handler.OnConnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
 			fmt.Printf("Client connected: %s\n", client.ID)
 			return nil

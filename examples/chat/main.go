@@ -36,7 +36,7 @@ const (
 )
 
 func main() {
-	server := server.NewServer(
+	server := server.New(
 		server.WithPort(8081),
 		server.WithPath("/ws"),
 		server.WithJSONSerializer(),

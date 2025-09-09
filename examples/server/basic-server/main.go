@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	ws := server.NewServer(
+	ws := server.New(
 		server.WithPort(8080),
 		server.WithPath("/ws"),
 		server.OnConnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {

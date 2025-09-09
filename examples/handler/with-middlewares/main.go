@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	handler := handler.NewHandler(
+	handler := handler.New(
 		handler.WithMiddleware(LoggingMiddleware),
 		handler.WithMiddleware(AuthMiddleware),
 		handler.OnConnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {

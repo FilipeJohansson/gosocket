@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	server := server.NewServer(
+	server := server.New(
 		server.WithPort(8080),
 		server.WithPath("/ws"),
 		server.WithMiddleware(LoggingMiddleware),
