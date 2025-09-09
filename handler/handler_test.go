@@ -203,7 +203,7 @@ func MockMiddleware2(next http.Handler) http.Handler {
 }
 
 func TestNewHandler(t *testing.T) {
-	handler := NewHandler()
+	handler := New()
 
 	assert.NotNil(t, handler)
 	assert.NotNil(t, handler.hub)
@@ -239,7 +239,7 @@ func TestHandler_MaxConnections(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler(WithMaxConnections(tt.input))
+			handler := New(WithMaxConnections(tt.input))
 			assert.Equal(t, tt.expected, handler.config.MaxConnections)
 		})
 	}
@@ -270,7 +270,7 @@ func TestHandler_MessageSize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler(WithMessageSize(tt.input))
+			handler := New(WithMessageSize(tt.input))
 			assert.Equal(t, tt.expected, handler.config.MessageSize)
 		})
 	}
@@ -302,7 +302,7 @@ func TestHandler_Timeout(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler(WithTimeout(tt.read, tt.write))
+			handler := New(WithTimeout(tt.read, tt.write))
 			assert.Equal(t, tt.expectedRead, handler.config.ReadTimeout)
 			assert.Equal(t, tt.expectedWrite, handler.config.WriteTimeout)
 		})
@@ -335,7 +335,7 @@ func TestHandler_PingPong(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler(WithPingPong(tt.pingPeriod, tt.pongWait))
+			handler := New(WithPingPong(tt.pingPeriod, tt.pongWait))
 			assert.Equal(t, tt.expectedPingPeriod, handler.config.PingPeriod)
 			assert.Equal(t, tt.expectedPongWait, handler.config.PongWait)
 		})
@@ -344,13 +344,13 @@ func TestHandler_PingPong(t *testing.T) {
 
 func TestHandler_AllowedOrigins(t *testing.T) {
 	origins := []string{"http://localhost:3000", "https://example.com"}
-	handler := NewHandler(WithAllowedOrigins(origins))
+	handler := New(WithAllowedOrigins(origins))
 
 	assert.Equal(t, origins, handler.config.AllowedOrigins)
 }
 
 func TestHandler_Encoding(t *testing.T) {
-	handler := NewHandler(WithEncoding(gosocket.Protobuf))
+	handler := New(WithEncoding(gosocket.Protobuf))
 	assert.Equal(t, gosocket.Protobuf, handler.config.DefaultEncoding)
 }
 
@@ -389,7 +389,7 @@ func TestHandler_Serializers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler()
+			handler := New()
 			tt.setup(handler)
 			assert.NotNil(t, handler.serializers[tt.serializer])
 			assert.IsType(t, tt.wantType, handler.serializers[tt.serializer])
@@ -398,17 +398,17 @@ func TestHandler_Serializers(t *testing.T) {
 }
 
 func TestHandler_Middleware(t *testing.T) {
-	handler := NewHandler()
+	handler := New()
 
 	// no middlewares
 	assert.Nil(t, handler.middlewares)
 
 	// one middleware
-	handler = NewHandler(WithMiddleware(MockMiddleware1))
+	handler = New(WithMiddleware(MockMiddleware1))
 	assert.Len(t, handler.middlewares, 1)
 
 	// multiple middlewares
-	handler = NewHandler(
+	handler = New(
 		WithMiddleware(MockMiddleware1),
 		WithMiddleware(MockMiddleware2),
 	)
@@ -416,7 +416,7 @@ func TestHandler_Middleware(t *testing.T) {
 }
 
 func TestHandler_Auth(t *testing.T) {
-	handler := NewHandler(WithAuth(MockAuthSuccess))
+	handler := New(WithAuth(MockAuthSuccess))
 	assert.NotNil(t, handler.authFunc)
 
 	// test that auth function works
@@ -437,7 +437,7 @@ func TestHandler_EventHandlers(t *testing.T) {
 		pongCalled        bool
 	)
 
-	handler := NewHandler(
+	handler := New(
 		OnConnect(func(c *gosocket.Client, ctx *HandlerContext) error {
 			connectCalled = true
 			return nil
@@ -575,7 +575,7 @@ func TestHandler_ProcessMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler()
+			handler := New()
 			for _, setup := range tt.setupHandlers {
 				setup(handler)
 			}
@@ -590,7 +590,7 @@ func TestHandler_ProcessMessage(t *testing.T) {
 }
 
 func TestHandler_EnsureHubRunning(t *testing.T) {
-	handler := NewHandler()
+	handler := New()
 
 	// mock the hub's Run method to track if it was called
 	mockHub := NewMockHub()
@@ -643,7 +643,7 @@ func TestHandler_ServeHTTP_OriginCheck(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler(WithAllowedOrigins(tt.allowedOrigins))
+			handler := New(WithAllowedOrigins(tt.allowedOrigins))
 
 			req := httptest.NewRequest("GET", "/ws", nil)
 			req.Header.Set("Connection", "upgrade")
@@ -709,7 +709,7 @@ func TestHandler_AuthenticationIntegration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewHandler(WithAuth(tt.authFunc))
+			handler := New(WithAuth(tt.authFunc))
 			req := httptest.NewRequest("GET", "/ws", nil)
 			for k, v := range tt.header {
 				req.Header.Set(k, v)
@@ -729,7 +729,7 @@ func TestHandler_AuthenticationIntegration(t *testing.T) {
 }
 
 func TestHandler_ConcurrentAccess(t *testing.T) {
-	handler := NewHandler()
+	handler := New()
 
 	var wg sync.WaitGroup
 	numGoroutines := 10
@@ -740,7 +740,7 @@ func TestHandler_ConcurrentAccess(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 
-			handler = NewHandler(
+			handler = New(
 				WithMaxConnections(id*100),
 				WithMessageSize(int64(id*1024)),
 				WithEncoding(gosocket.JSON),
@@ -780,7 +780,7 @@ func TestHandler_DefaultConfig(t *testing.T) {
 
 func TestHandler_ChainedConfiguration(t *testing.T) {
 	// test that chained configuration returns the same handler instance
-	handler := NewHandler(
+	handler := New(
 		WithMaxConnections(500),
 		WithMessageSize(2048),
 		WithTimeout(30*time.Second, 15*time.Second),

@@ -305,11 +305,11 @@ type Handler struct {
 	mu          sync.RWMutex
 }
 
-// NewHandler returns a new instance of Handler with default configuration.
+// New returns a new instance of Handler with default configuration.
 // The default configuration is to accept up to 1000 connections and to set the
 // read and write buffers to 1024 bytes. The default encoding is JSON, but you can
 // change it by calling the WithEncoding method.
-func NewHandler(options ...func(*Handler)) *Handler {
+func New(options ...func(*Handler)) *Handler {
 	handler := &Handler{
 		hub:         gosocket.NewHub(),
 		config:      gosocket.DefaultHandlerConfig(),
@@ -764,7 +764,7 @@ func WithAuth(authFunc gosocket.AuthFunc) func(*Handler) {
 // error if the connection should be closed. The handler is called after the
 // authentication function has been called and the client has been added to the
 // server's list of clients.
-func OnConnect(handler func(*gosocket.Client, *HandlerContext) error) func(*Handler) {
+func OnConnect(handler func(c *gosocket.Client, ctx *HandlerContext) error) func(*Handler) {
 	return func(h *Handler) {
 		if h.handlers == nil {
 			h.handlers = &Handlers{}
@@ -777,7 +777,7 @@ func OnConnect(handler func(*gosocket.Client, *HandlerContext) error) func(*Hand
 // called when a client disconnects from the server. The handler should return an
 // error if the disconnection should be treated as an error. The handler is called
 // after the client has been removed from the server's list of clients.
-func OnDisconnect(handler func(*gosocket.Client, *HandlerContext) error) func(*Handler) {
+func OnDisconnect(handler func(c *gosocket.Client, ctx *HandlerContext) error) func(*Handler) {
 	return func(h *Handler) {
 		if h.handlers == nil {
 			h.handlers = &Handlers{}
@@ -790,7 +790,7 @@ func OnDisconnect(handler func(*gosocket.Client, *HandlerContext) error) func(*H
 // a new message is received from a client. The handler should return an error if
 // the message should be treated as an error. The handler is called after the
 // message has been decoded and deserialized.
-func OnMessage(handler func(*gosocket.Client, *gosocket.Message, *HandlerContext) error) func(*Handler) {
+func OnMessage(handler func(c *gosocket.Client, m *gosocket.Message, ctx *HandlerContext) error) func(*Handler) {
 	return func(h *Handler) {
 		if h.handlers == nil {
 			h.handlers = &Handlers{}
@@ -803,7 +803,7 @@ func OnMessage(handler func(*gosocket.Client, *gosocket.Message, *HandlerContext
 // called when a new raw message is received from a client. The handler should
 // return an error if the message should be treated as an error. The handler is
 // called after the message has been decoded, but before it has been deserialized.
-func OnRawMessage(handler func(*gosocket.Client, []byte, *HandlerContext) error) func(*Handler) {
+func OnRawMessage(handler func(c *gosocket.Client, m []byte, ctx *HandlerContext) error) func(*Handler) {
 	return func(h *Handler) {
 		if h.handlers == nil {
 			h.handlers = &Handlers{}
@@ -816,7 +816,7 @@ func OnRawMessage(handler func(*gosocket.Client, []byte, *HandlerContext) error)
 // called when a new JSON message is received from a client. The handler should
 // return an error if the message should be treated as an error. The handler is
 // called after the message has been decoded and parsed as JSON.
-func OnJSONMessage(handler func(*gosocket.Client, interface{}, *HandlerContext) error) func(*Handler) {
+func OnJSONMessage(handler func(c *gosocket.Client, m interface{}, ctx *HandlerContext) error) func(*Handler) {
 	return func(h *Handler) {
 		if h.handlers == nil {
 			h.handlers = &Handlers{}
@@ -829,7 +829,7 @@ func OnJSONMessage(handler func(*gosocket.Client, interface{}, *HandlerContext) 
 // is called when a new Protobuf message is received from a client. The handler
 // should return an error if the message should be treated as an error. The handler
 // is called after the message has been decoded and parsed as Protobuf.
-func OnProtobufMessage(handler func(*gosocket.Client, interface{}, *HandlerContext) error) func(*Handler) {
+func OnProtobufMessage(handler func(c *gosocket.Client, m interface{}, ctx *HandlerContext) error) func(*Handler) {
 	return func(h *Handler) {
 		if h.handlers == nil {
 			h.handlers = &Handlers{}
@@ -843,7 +843,7 @@ func OnProtobufMessage(handler func(*gosocket.Client, interface{}, *HandlerConte
 // error should be treated as an error. The handler is called with the
 // client that caused the error and the error itself. The handler is called
 // after the error has been logged.
-func OnError(handler func(*gosocket.Client, error, *HandlerContext) error) func(*Handler) {
+func OnError(handler func(c *gosocket.Client, err error, ctx *HandlerContext) error) func(*Handler) {
 	return func(h *Handler) {
 		if h.handlers == nil {
 			h.handlers = &Handlers{}
@@ -856,7 +856,7 @@ func OnError(handler func(*gosocket.Client, error, *HandlerContext) error) func(
 // called when a ping message is sent by a client. The handler should
 // return an error if the ping should be treated as an error. The handler
 // is called with the client that sent the ping.
-func OnPing(handler func(*gosocket.Client, *HandlerContext) error) func(*Handler) {
+func OnPing(handler func(c *gosocket.Client, ctx *HandlerContext) error) func(*Handler) {
 	return func(h *Handler) {
 		if h.handlers == nil {
 			h.handlers = &Handlers{}
@@ -869,7 +869,7 @@ func OnPing(handler func(*gosocket.Client, *HandlerContext) error) func(*Handler
 // pong message is sent by a client. The handler should return an error if the
 // pong should be treated as an error. The handler is called with the client that
 // sent the pong.
-func OnPong(handler func(*gosocket.Client, *HandlerContext) error) func(*Handler) {
+func OnPong(handler func(c *gosocket.Client, ctx *HandlerContext) error) func(*Handler) {
 	return func(h *Handler) {
 		if h.handlers == nil {
 			h.handlers = &Handlers{}

@@ -199,7 +199,7 @@ func TestNewServer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewServer()
+			server := New()
 			tt.expected(server)
 		})
 	}
@@ -243,7 +243,7 @@ func TestServer_WithPort(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewServer(WithPort(tt.port))
+			server := New(WithPort(tt.port))
 			tt.expected(server)
 		})
 	}
@@ -280,7 +280,7 @@ func TestServer_WithPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewServer(WithPath(tt.path))
+			server := New(WithPath(tt.path))
 			tt.expected(server)
 		})
 	}
@@ -310,7 +310,7 @@ func TestServer_WithCORS(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewServer(WithCORS(tt.enabled))
+			server := New(WithCORS(tt.enabled))
 			tt.expected(server)
 		})
 	}
@@ -347,7 +347,7 @@ func TestServer_WithSSL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewServer(WithSSL(tt.certFile, tt.keyFile))
+			server := New(WithSSL(tt.certFile, tt.keyFile))
 			tt.expected(server)
 		})
 	}
@@ -384,7 +384,7 @@ func TestServer_WithMaxConnections(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewServer(WithMaxConnections(tt.maxConns))
+			server := New(WithMaxConnections(tt.maxConns))
 			tt.expected(server)
 		})
 	}
@@ -421,7 +421,7 @@ func TestServer_WithMessageSize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewServer(WithMessageSize(tt.size))
+			server := New(WithMessageSize(tt.size))
 			tt.expected(server)
 		})
 	}
@@ -465,7 +465,7 @@ func TestServer_WithTimeout(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewServer(WithTimeout(tt.read, tt.write))
+			server := New(WithTimeout(tt.read, tt.write))
 			tt.expected(server)
 		})
 	}
@@ -509,7 +509,7 @@ func TestServer_WithPingPong(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewServer(WithPingPong(tt.pingPeriod, tt.pongWait))
+			server := New(WithPingPong(tt.pingPeriod, tt.pongWait))
 			tt.expected(server)
 		})
 	}
@@ -539,7 +539,7 @@ func TestServer_WithAllowedOrigins(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewServer(WithAllowedOrigins(tt.origins))
+			server := New(WithAllowedOrigins(tt.origins))
 			tt.expected(server)
 		})
 	}
@@ -576,7 +576,7 @@ func TestServer_WithEncoding(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewServer(WithEncoding(tt.encoding))
+			server := New(WithEncoding(tt.encoding))
 			tt.expected(server)
 		})
 	}
@@ -623,14 +623,14 @@ func TestServer_WithSerializer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewServer(WithSerializer(tt.encoding, tt.serializer))
+			server := New(WithSerializer(tt.encoding, tt.serializer))
 			tt.expected(server)
 		})
 	}
 }
 
 func TestServer_WithJSONSerializer(t *testing.T) {
-	server := NewServer(WithJSONSerializer())
+	server := New(WithJSONSerializer())
 
 	ser, exists := server.handler.Serializers()[gosocket.JSON]
 	assert.True(t, exists)
@@ -638,7 +638,7 @@ func TestServer_WithJSONSerializer(t *testing.T) {
 }
 
 func TestServer_WithRawSerializer(t *testing.T) {
-	server := NewServer(WithRawSerializer())
+	server := New(WithRawSerializer())
 
 	ser, exists := server.handler.Serializers()[gosocket.Raw]
 	assert.True(t, exists)
@@ -660,7 +660,7 @@ func TestServer_WithMiddleware(t *testing.T) {
 		})
 	}
 
-	server := NewServer(
+	server := New(
 		WithMiddleware(middleware1),
 		WithMiddleware(middleware2),
 	)
@@ -677,7 +677,7 @@ func TestServer_WithAuth(t *testing.T) {
 		return map[string]interface{}{"user_id": "123"}, nil
 	}
 
-	server := NewServer(WithAuth(authFunc))
+	server := New(WithAuth(authFunc))
 
 	assert.NotNil(t, server.handler.AuthFunc())
 }
@@ -755,7 +755,7 @@ func TestServer_EventHandlers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := NewServer()
+			server := New()
 			tt.setup(server)
 			tt.validate(server)
 		})
@@ -772,7 +772,7 @@ func TestServer_Broadcast(t *testing.T) {
 		{
 			name: "broadcasts message successfully",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -784,7 +784,7 @@ func TestServer_Broadcast(t *testing.T) {
 		{
 			name: "fails when server not initialized",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				server.handler = nil
 				return server
 			},
@@ -794,7 +794,7 @@ func TestServer_Broadcast(t *testing.T) {
 		{
 			name: "fails when hub is nil",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				server.handler.SetHub(nil)
 				return server
 			},
@@ -831,7 +831,7 @@ func TestServer_BroadcastMessage(t *testing.T) {
 		{
 			name: "broadcasts message successfully",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -843,7 +843,7 @@ func TestServer_BroadcastMessage(t *testing.T) {
 		{
 			name: "fails when server not initialized",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				server.handler = nil
 				return server
 			},
@@ -880,7 +880,7 @@ func TestServer_BroadcastJSON(t *testing.T) {
 		{
 			name: "broadcasts JSON successfully",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -892,7 +892,7 @@ func TestServer_BroadcastJSON(t *testing.T) {
 		{
 			name: "fails with invalid JSON data",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				mockHub := NewMockHub()
 				server.handler.SetHub(mockHub)
 				return server
@@ -931,7 +931,7 @@ func TestServer_BroadcastToRoom(t *testing.T) {
 		{
 			name: "broadcasts to room successfully",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastToRoom", "test-room", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -944,7 +944,7 @@ func TestServer_BroadcastToRoom(t *testing.T) {
 		{
 			name: "fails when server not initialized",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				server.handler = nil
 				return server
 			},
@@ -983,7 +983,7 @@ func TestServer_BroadcastToRoomJSON(t *testing.T) {
 		{
 			name: "broadcasts JSON to room successfully",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastToRoom", "test-room", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -996,7 +996,7 @@ func TestServer_BroadcastToRoomJSON(t *testing.T) {
 		{
 			name: "fails with invalid JSON data",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				mockHub := NewMockHub()
 				server.handler.SetHub(mockHub)
 				return server
@@ -1034,7 +1034,7 @@ func TestServer_GetClients(t *testing.T) {
 		{
 			name: "returns empty slice when hub is nil",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				server.handler.SetHub(nil)
 				return server
 			},
@@ -1043,7 +1043,7 @@ func TestServer_GetClients(t *testing.T) {
 		{
 			name: "returns clients from hub",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				hub := gosocket.NewHub()
 
 				// Add some mock clients
@@ -1082,7 +1082,7 @@ func TestServer_GetClient(t *testing.T) {
 		{
 			name: "finds existing client",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				hub := gosocket.NewHub()
 
 				client := gosocket.NewClient("test-client", &MockWebSocketConn{}, hub)
@@ -1097,7 +1097,7 @@ func TestServer_GetClient(t *testing.T) {
 		{
 			name: "returns nil for non-existing client",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				hub := gosocket.NewHub()
 				server.handler.SetHub(hub)
 				return server
@@ -1131,7 +1131,7 @@ func TestServer_GetClientCount(t *testing.T) {
 		{
 			name: "returns 0 when hub is nil",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				server.handler.SetHub(nil)
 				return server
 			},
@@ -1140,7 +1140,7 @@ func TestServer_GetClientCount(t *testing.T) {
 		{
 			name: "returns correct client count",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				hub := gosocket.NewHub()
 
 				// Add some mock clients
@@ -1182,7 +1182,7 @@ func TestServer_RoomManagement(t *testing.T) {
 		{
 			name: "creates room successfully",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				mockHub := NewMockHub()
 				mockHub.On("CreateRoom", "test-room").Return(nil)
 				server.handler.SetHub(mockHub)
@@ -1195,7 +1195,7 @@ func TestServer_RoomManagement(t *testing.T) {
 		{
 			name: "fails to create room with empty name",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				mockHub := NewMockHub()
 				mockHub.On("CreateRoom", "").Return(fmt.Errorf("room name cannot be empty"))
 				server.handler.SetHub(mockHub)
@@ -1208,7 +1208,7 @@ func TestServer_RoomManagement(t *testing.T) {
 		{
 			name: "deletes room successfully",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				mockHub := NewMockHub()
 				mockHub.On("CreateRoom", "test-room").Return(nil)
 				mockHub.On("DeleteRoom", "test-room").Return(nil)
@@ -1223,7 +1223,7 @@ func TestServer_RoomManagement(t *testing.T) {
 		{
 			name: "fails to delete non-existing room",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				mockHub := NewMockHub()
 				mockHub.On("DeleteRoom", "non-existing").Return(fmt.Errorf("room not found: non-existing"))
 				server.handler.SetHub(mockHub)
@@ -1270,7 +1270,7 @@ func TestServer_GetRooms(t *testing.T) {
 		{
 			name: "returns empty slice when hub is nil",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				server.handler.SetHub(nil)
 				return server
 			},
@@ -1279,7 +1279,7 @@ func TestServer_GetRooms(t *testing.T) {
 		{
 			name: "returns room names",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				hub := gosocket.NewHub()
 
 				// Create some rooms
@@ -1318,7 +1318,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 		{
 			name: "joins room successfully",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				hub := gosocket.NewHub()
 
 				client := gosocket.NewClient("test-client", &MockWebSocketConn{}, hub)
@@ -1335,7 +1335,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 		{
 			name: "fails to join room with non-existing client",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				hub := gosocket.NewHub()
 				server.handler.SetHub(hub)
 				return server
@@ -1348,7 +1348,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 		{
 			name: "leaves room successfully",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				hub := gosocket.NewHub()
 
 				client := gosocket.NewClient("test-client", &MockWebSocketConn{}, hub)
@@ -1365,7 +1365,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 		{
 			name: "fails to leave room with non-existing client",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				hub := gosocket.NewHub()
 				server.handler.SetHub(hub)
 				return server
@@ -1409,7 +1409,7 @@ func TestServer_DisconnectClient(t *testing.T) {
 		{
 			name: "disconnects client successfully",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				mockHub := NewMockHub()
 
 				mockConn := &MockWebSocketConn{}
@@ -1430,7 +1430,7 @@ func TestServer_DisconnectClient(t *testing.T) {
 		{
 			name: "fails to disconnect non-existing client",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				mockHub := NewMockHub()
 				mockHub.Clients = map[*gosocket.Client]bool{} // Empty clients map
 				server.handler.SetHub(mockHub)
@@ -1468,7 +1468,7 @@ func TestServer_Stop(t *testing.T) {
 		{
 			name: "fails when server is not running",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				server.isRunning = false
 				return server
 			},
@@ -1477,7 +1477,7 @@ func TestServer_Stop(t *testing.T) {
 		{
 			name: "fails when server is nil",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				server.isRunning = true
 				server.server = nil
 				return server
@@ -1511,7 +1511,7 @@ func TestServer_BroadcastData(t *testing.T) {
 		{
 			name: "broadcasts data with JSON serializer",
 			setupServer: func() *Server {
-				server := NewServer(WithJSONSerializer())
+				server := New(WithJSONSerializer())
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -1523,7 +1523,7 @@ func TestServer_BroadcastData(t *testing.T) {
 		{
 			name: "falls back to JSON when no serializer",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				server.handler.SetDefaultEncoding(gosocket.Raw) // No serializer for Raw
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
@@ -1564,7 +1564,7 @@ func TestServer_BroadcastDataWithEncoding(t *testing.T) {
 		{
 			name: "broadcasts with JSON encoding",
 			setupServer: func() *Server {
-				server := NewServer(WithJSONSerializer())
+				server := New(WithJSONSerializer())
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -1577,7 +1577,7 @@ func TestServer_BroadcastDataWithEncoding(t *testing.T) {
 		{
 			name: "fails with unsupported encoding",
 			setupServer: func() *Server {
-				server := NewServer()
+				server := New()
 				mockHub := NewMockHub()
 				server.handler.SetHub(mockHub)
 				return server

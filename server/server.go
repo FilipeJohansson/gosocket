@@ -105,10 +105,10 @@ type Server struct {
 	mu        sync.RWMutex
 }
 
-// NewServer returns a new Server instance with default configuration.
-func NewServer(options ...func(*Server)) *Server {
+// New returns a new Server instance with default configuration.
+func New(options ...func(*Server)) *Server {
 	svr := &Server{
-		handler: handler.NewHandler(),
+		handler: handler.New(),
 		config:  gosocket.DefaultServerConfig(),
 		mu:      sync.RWMutex{},
 	}
@@ -309,7 +309,7 @@ func WithAuth(authFunc gosocket.AuthFunc) func(*Server) {
 // connection should be closed. The handler is called after the authentication
 // function has been called and the client has been added to the server's list of
 // clients.
-func OnConnect(handlerFunc func(*gosocket.Client, *handler.HandlerContext) error) func(*Server) {
+func OnConnect(handlerFunc func(c *gosocket.Client, ctx *handler.HandlerContext) error) func(*Server) {
 	return func(s *Server) {
 		handlerOption := handler.OnConnect(handlerFunc)
 		handlerOption(s.handler)
@@ -320,7 +320,7 @@ func OnConnect(handlerFunc func(*gosocket.Client, *handler.HandlerContext) error
 // called when a client disconnects from the server. The handler should return an
 // error if the disconnection should be treated as an error. The handler is called
 // after the client has been removed from the server's list of clients.
-func OnDisconnect(handlerFunc func(*gosocket.Client, *handler.HandlerContext) error) func(*Server) {
+func OnDisconnect(handlerFunc func(c *gosocket.Client, ctx *handler.HandlerContext) error) func(*Server) {
 	return func(s *Server) {
 		handlerOption := handler.OnDisconnect(handlerFunc)
 		handlerOption(s.handler)
@@ -331,7 +331,7 @@ func OnDisconnect(handlerFunc func(*gosocket.Client, *handler.HandlerContext) er
 // a new message is received from a client. The handler should return an error if
 // the message should be treated as an error. The handler is called after the
 // message has been decoded and deserialized.
-func OnMessage(handlerFunc func(*gosocket.Client, *gosocket.Message, *handler.HandlerContext) error) func(*Server) {
+func OnMessage(handlerFunc func(c *gosocket.Client, m *gosocket.Message, ctx *handler.HandlerContext) error) func(*Server) {
 	return func(s *Server) {
 		handlerOption := handler.OnMessage(handlerFunc)
 		handlerOption(s.handler)
@@ -342,7 +342,7 @@ func OnMessage(handlerFunc func(*gosocket.Client, *gosocket.Message, *handler.Ha
 // when a new message is received from a client. The handler should return an error
 // if the message should be treated as an error. The handler is called after the
 // message has been decoded, but before it has been deserialized.
-func OnRawMessage(handlerFunc func(*gosocket.Client, []byte, *handler.HandlerContext) error) func(*Server) {
+func OnRawMessage(handlerFunc func(c *gosocket.Client, m []byte, ctx *handler.HandlerContext) error) func(*Server) {
 	return func(s *Server) {
 		handlerOption := handler.OnRawMessage(handlerFunc)
 		handlerOption(s.handler)
@@ -353,7 +353,7 @@ func OnRawMessage(handlerFunc func(*gosocket.Client, []byte, *handler.HandlerCon
 // called when a new JSON message is received from a client. The handler should
 // return an error if the message should be treated as an error. The handler is
 // called after the message has been decoded and parsed as JSON.
-func OnJSONMessage(handlerFunc func(*gosocket.Client, interface{}, *handler.HandlerContext) error) func(*Server) {
+func OnJSONMessage(handlerFunc func(c *gosocket.Client, m interface{}, ctx *handler.HandlerContext) error) func(*Server) {
 	return func(s *Server) {
 		handlerOption := handler.OnJSONMessage(handlerFunc)
 		handlerOption(s.handler)
@@ -365,7 +365,7 @@ func OnJSONMessage(handlerFunc func(*gosocket.Client, interface{}, *handler.Hand
 // handler should return an error if the message should be treated as an error.
 // The handler is called after the message has been decoded and parsed as
 // Protobuf.
-func OnProtobufMessage(handlerFunc func(*gosocket.Client, interface{}, *handler.HandlerContext) error) func(*Server) {
+func OnProtobufMessage(handlerFunc func(c *gosocket.Client, m interface{}, ctx *handler.HandlerContext) error) func(*Server) {
 	return func(s *Server) {
 		handlerOption := handler.OnProtobufMessage(handlerFunc)
 		handlerOption(s.handler)
@@ -377,7 +377,7 @@ func OnProtobufMessage(handlerFunc func(*gosocket.Client, interface{}, *handler.
 // treated as an error. The handler is called with the client that caused the
 // error and the error itself. The handler is called after the error has been
 // logged.
-func OnError(handlerFunc func(*gosocket.Client, error, *handler.HandlerContext) error) func(*Server) {
+func OnError(handlerFunc func(c *gosocket.Client, err error, ctx *handler.HandlerContext) error) func(*Server) {
 	return func(s *Server) {
 		handlerOption := handler.OnError(handlerFunc)
 		handlerOption(s.handler)
@@ -388,7 +388,7 @@ func OnError(handlerFunc func(*gosocket.Client, error, *handler.HandlerContext) 
 // ping message is sent by a client. The handler should return an error if the
 // ping should be treated as an error. The handler is called with the client that
 // sent the ping.
-func OnPing(handlerFunc func(*gosocket.Client, *handler.HandlerContext) error) func(*Server) {
+func OnPing(handlerFunc func(c *gosocket.Client, ctx *handler.HandlerContext) error) func(*Server) {
 	return func(s *Server) {
 		handlerOption := handler.OnPing(handlerFunc)
 		handlerOption(s.handler)
@@ -398,7 +398,7 @@ func OnPing(handlerFunc func(*gosocket.Client, *handler.HandlerContext) error) f
 // OnPong sets the OnPong handler for the server. This handler is called when a pong message is sent by a client.
 // The handler should return an error if the pong should be treated as an error. The handler is called with the client that
 // sent the pong.
-func OnPong(handlerFunc func(*gosocket.Client, *handler.HandlerContext) error) func(*Server) {
+func OnPong(handlerFunc func(c *gosocket.Client, ctx *handler.HandlerContext) error) func(*Server) {
 	return func(s *Server) {
 		handlerOption := handler.OnPong(handlerFunc)
 		handlerOption(s.handler)
