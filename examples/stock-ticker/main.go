@@ -94,23 +94,26 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
 <html lang="en">
 <head>
 	<meta charset="UTF-8">
-	<title>Live Stock Ticker</title>
+	<title>Stock Ticker</title>
 	<style>
-		table { border-collapse: collapse; width: 50%; margin-top: 20px; }
-		th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
-		th { background-color: #f2f2f2; }
+		body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .stock { display: flex; justify-content: space-between; padding: 10px; border: 1px solid #ddd; margin: 5px 0; }
+        .price { font-weight: bold; }
+        .positive { color: green; }
+        .negative { color: red; }
+        button { margin-left: 10px; padding: 5px 10px; }
+        .watchlist { background: #f0f8ff; margin-top: 20px; padding: 15px; }
 	</style>
 </head>
 <body>
-	<h1>Live Stock Ticker</h1>
-	<table>
-		<thead>
-			<tr><th>Symbol</th><th>Price</th><th>Change</th></tr>
-		</thead>
-		<tbody id="stock-body"></tbody>
-	</table>
+	<h1>Stock Ticker</h1>
+
+	<div id="stocks"></div>
+
 	<script>
+		const stockBody = document.getElementById("stock-body");
 		let ws;
+		let stocks = {};
 
 		function connect() {
             ws = new WebSocket('ws://localhost:8081/ws');
@@ -124,20 +127,33 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
 				if(msg.type === "stock_update") {
 					const data = msg.data;
 					stocks[data.symbol] = data;
-
-					stockBody.innerHTML = "";
-					for(const sym in stocks) {
-						const s = stocks[sym];
-						const row = document.createElement("tr");
-						row.innerHTML = "<td>" + s.symbol + "</td><td>" + s.price.toFixed(2) + "</td><td style='color:" + (s.change>=0?'green':'red') + "'>" + s.change.toFixed(2) + "</td>";
-						stockBody.appendChild(row);
-					}
+					updateDisplay();
 				}
 			};
         }
 
-		const stockBody = document.getElementById("stock-body");
-		let stocks = {};
+		function updateDisplay() {
+            // All stocks
+            const stocksDiv = document.getElementById('stocks');
+            stocksDiv.innerHTML = '';
+            
+            for (const symbol in stocks) {
+                const stock = stocks[symbol];
+                const div = document.createElement('div');
+                div.className = 'stock';
+                
+                const changeClass = stock.change >= 0 ? 'positive' : 'negative';
+                const changeSign = stock.change >= 0 ? '+' : '';
+                
+                div.innerHTML = 
+                    '<span><strong>' + symbol + '</strong></span>' +
+                    '<span class="price">$' + stock.price.toFixed(2) + 
+                    ' <span class="' + changeClass + '">' + changeSign + stock.change.toFixed(2) + '</span></span>';
+                
+                stocksDiv.appendChild(div);
+            }
+        }
+
 
 		// Connect when page loads
 		connect();
