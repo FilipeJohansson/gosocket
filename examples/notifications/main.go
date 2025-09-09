@@ -3,7 +3,7 @@
 package main
 
 import (
-	"fmt"
+	"encoding/json"
 	"log"
 	"net/http"
 	"time"
@@ -13,116 +13,170 @@ import (
 	"github.com/FilipeJohansson/gosocket/server"
 )
 
-type NotificationMessageData struct {
+type Message struct {
+	Type string      `json:"type"`
+	Data interface{} `json:"data,omitempty"`
+}
+
+type Notification struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
 	Icon  string `json:"icon"`
-}
-
-type NotificationMessage struct {
-	Type string                  `json:"type"`
-	Data NotificationMessageData `json:"data"`
 }
 
 func main() {
 	srv := server.New(
 		server.WithPort(8081),
 		server.WithPath("/ws"),
-		server.WithJSONSerializer(),
-		server.OnConnect(func(c *gosocket.Client, hc *handler.HandlerContext) error {
-			fmt.Printf("Client connected: %s\n", c.ID)
-			return nil
-		}),
-		server.OnDisconnect(func(c *gosocket.Client, hc *handler.HandlerContext) error {
-			fmt.Printf("Client disconnected: %s\n", c.ID)
-			return nil
-		}),
+		server.OnConnect(onConnect),
+		server.OnJSONMessage(onMessage),
 	)
 
-	// Serve static files for the notifications client
-	http.HandleFunc("/", serveHome)
+	http.HandleFunc("/", servePage)
 
-	fmt.Println("Notifications server starting...")
-	fmt.Println("Open http://localhost:8080 to access the client")
-
+	// Send periodic notifications
 	go func() {
-		// Send periodic notifications to all connected clients
 		for {
-			notificationMessage := NotificationMessage{
-				Type: "push",
-				Data: NotificationMessageData{
-					Title: "Hello from GoSocket!",
-					Body:  "See how simple it is to send push notifications to your users!",
-					Icon:  "https://placehold.co/10",
+			time.Sleep(15 * time.Second)
+			srv.BroadcastJSON(Message{
+				Type: "notification",
+				Data: Notification{
+					Title: "System Alert",
+					Body:  "Server is running perfectly!",
+					Icon:  "https://placehold.co/50",
 				},
-			}
-			srv.BroadcastJSON(notificationMessage)
-			time.Sleep(10 * time.Second)
+			})
 		}
 	}()
 
-	// Start GoSocket server
 	go func() {
-		fmt.Println("Starting GoSocket server...")
-		if err := srv.Start(); err != nil {
-			log.Fatal("Failed to start WebSocket server:", err)
-		}
+		log.Fatal(srv.Start())
 	}()
 
-	// Start HTTP server for serving the client page
-	fmt.Println("Starting HTTP server on port 8080...")
+	log.Println("Notifications server at http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func serveHome(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.Error(w, "Not found", http.StatusNotFound)
-		return
+func onConnect(client *gosocket.Client, ctx *handler.HandlerContext) error {
+	return client.SendJSON(Message{
+		Type: "notification",
+		Data: Notification{
+			Title: "Welcome!",
+			Body:  "You're now connected to GoSocket notifications",
+			Icon:  "https://placehold.co/50",
+		},
+	})
+}
+
+func onMessage(client *gosocket.Client, data interface{}, ctx *handler.HandlerContext) error {
+	jsonBytes, _ := json.Marshal(data)
+	var msg Message
+	json.Unmarshal(jsonBytes, &msg)
+
+	if msg.Type == "send" {
+		// Broadcast user's notification to all clients
+		ctx.BroadcastJSONToAll(Message{
+			Type: "notification",
+			Data: Notification{
+				Title: "User Alert",
+				Body:  msg.Data.(string),
+				Icon:  "https://placehold.co/50",
+			},
+		})
 	}
 
+	return nil
+}
+
+func servePage(w http.ResponseWriter, r *http.Request) {
 	html := `<!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-	<meta charset="UTF-8">
-	<title>Push Notifications Demo</title>
+    <title>Simple Notifications</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px; }
+        .box { padding: 20px; border: 1px solid #ccc; margin: 20px 0; }
+        input { padding: 10px; width: 300px; margin-right: 10px; }
+        button { padding: 10px 20px; }
+        .status { background: #f0f8ff; }
+        .quick-buttons button { margin: 5px; }
+    </style>
 </head>
 <body>
-	<h1>Push Notifications Demo</h1>
-	<script>
-		let ws;
+    <h1>Simple Notifications</h1>
+    
+    <div class="box status">
+        <div id="status">Connecting...</div>
+    </div>
+    
+    <div class="box">
+        <h3>Send Notification</h3>
+        <input type="text" id="message" placeholder="Type your message">
+        <button onclick="send()">Send</button>
+    </div>
+    
+    <div class="box quick-buttons">
+        <h3>Quick Send</h3>
+        <button onclick="quickSend('Coffee break time!')">Coffee Break</button>
+        <button onclick="quickSend('Meeting in 5 minutes')">Meeting Alert</button>
+        <button onclick="quickSend('Lunch time!')">Lunch Time</button>
+    </div>
 
-		function connect() {
-            ws = new WebSocket('ws://localhost:8081/ws');
-            
-            ws.onopen = () => {
-				console.log("Connected to WebSocket server");
-			};
-            
-            ws.onmessage = (event) => {
-				const data = JSON.parse(event.data);
-				if(data.type === "push") {
-					if('Notification' in window) {
-						new Notification(data.data.title, {
-							body: data.data.body,
-							icon: data.data.icon
-						});
-					}
-				}
-			};
+    <script>
+        const ws = new WebSocket('ws://localhost:8081/ws');
+        
+        // Request notification permission on load
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
         }
-
-		if ('Notification' in window) {
-			Notification.requestPermission().then(permission => {
-				if(permission === "granted") {
-					connect();
-				} else {
-					console.warn("User denied notifications");
-				}
-			});
-		} else {
-			connect();
-		}
-	</script>
+        
+        ws.onopen = () => {
+            document.getElementById('status').textContent = 'Connected - Ready to send/receive notifications';
+        };
+        
+        ws.onclose = () => {
+            document.getElementById('status').textContent = 'Disconnected';
+        };
+        
+        ws.onmessage = function(event) {
+            const msg = JSON.parse(event.data);
+            
+            if (msg.type === 'notification' && msg.data) {
+                // Show browser notification
+                if ('Notification' in window && Notification.permission === 'granted') {
+                    new Notification(msg.data.title, {
+                        body: msg.data.body,
+                        icon: msg.data.icon
+                    });
+                }
+            }
+        };
+        
+        function send() {
+            const message = document.getElementById('message').value.trim();
+            if (message) {
+                ws.send(JSON.stringify({
+                    type: 'send',
+                    data: message
+                }));
+                document.getElementById('message').value = '';
+            }
+        }
+        
+        function quickSend(message) {
+            ws.send(JSON.stringify({
+                type: 'send',
+                data: message
+            }));
+        }
+        
+        // Send on Enter key
+        document.getElementById('message').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                send();
+            }
+        });
+    </script>
 </body>
 </html>`
 
