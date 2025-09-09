@@ -398,20 +398,6 @@ func (h *Hub) IsRunning() bool {
 	return h.running
 }
 
-// removeClientFromAllRooms removes the given client from all rooms it is currently in.
-// It is used when a client is removed from the hub, to ensure that it is removed from
-// all rooms it is currently in. This prevents the client from receiving messages from
-// rooms it is no longer in.
-//
-// This method is safe to call concurrently, as it takes a read lock on the hub's rooms
-// map and then calls LeaveRoom on each room the client is in, which also takes a read
-// lock on the room's clients map.
-func (h *Hub) removeClientFromAllRooms(client *Client) {
-	for roomName := range h.Rooms {
-		h.LeaveRoom(client, roomName)
-	}
-}
-
 // removeClientFromAllRoomsUnsafe removes the given client from all rooms it is currently in.
 // This method is unsafe to call concurrently, as it does not take any locks on the hub's rooms
 // map. It should only be called when the hub is not running, or when the hub is already locked
@@ -459,7 +445,9 @@ func (h *Hub) broadcastToClients(message *Message, clients map[*Client]bool) {
 		}
 	}
 
+	h.mu.Lock()
 	for _, client := range clientsToRemove {
 		h.RemoveClient(client)
 	}
+	h.mu.Unlock()
 }

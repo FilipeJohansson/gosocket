@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/FilipeJohansson/gosocket"
-	"github.com/FilipeJohansson/gosocket/handler"
-	"github.com/FilipeJohansson/gosocket/server"
 )
 
 type StockUpdate struct {
@@ -22,19 +20,23 @@ type StockUpdate struct {
 func main() {
 	rand.Seed(time.Now().UnixNano())
 
-	srv := server.New(
-		server.WithPort(8081),
-		server.WithPath("/ws"),
-		server.WithJSONSerializer(),
-		server.OnConnect(func(c *gosocket.Client, hc *handler.HandlerContext) error {
+	ws, err := gosocket.NewServer(
+		gosocket.WithPort(8081),
+		gosocket.WithPath("/ws"),
+		gosocket.WithJSONSerializer(),
+		gosocket.OnConnect(func(c *gosocket.Client, hc *gosocket.HandlerContext) error {
 			fmt.Printf("Client connected: %s\n", c.ID)
 			return nil
 		}),
-		server.OnDisconnect(func(c *gosocket.Client, hc *handler.HandlerContext) error {
+		gosocket.OnDisconnect(func(c *gosocket.Client, hc *gosocket.HandlerContext) error {
 			fmt.Printf("Client disconnected: %s\n", c.ID)
 			return nil
 		}),
 	)
+
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Serve static files for the stock ticker client
 	http.HandleFunc("/", serveHome)
@@ -65,7 +67,7 @@ func main() {
 						"change": change,
 					},
 				}
-				srv.BroadcastJSON(update)
+				ws.BroadcastJSON(update)
 			}
 			time.Sleep(2 * time.Second)
 		}
@@ -73,8 +75,8 @@ func main() {
 
 	// Start GoSocket server
 	go func() {
-		fmt.Println("Starting GoSocket server...")
-		if err := srv.Start(); err != nil {
+		fmt.Println("Starting GoSocket gosocket...")
+		if err := ws.Start(); err != nil {
 			log.Fatal("Failed to start WebSocket server:", err)
 		}
 	}()

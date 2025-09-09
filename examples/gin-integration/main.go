@@ -6,24 +6,25 @@ import (
 	"net/http"
 
 	"github.com/FilipeJohansson/gosocket"
-	"github.com/FilipeJohansson/gosocket/handler"
 	"github.com/gin-gonic/gin"
 )
 
-var wsHandler *handler.Handler
-
 func main() {
 	// Create GoSocket handler
-	wsHandler = handler.New(
-		handler.OnConnect(func(c *gosocket.Client, ctx *handler.HandlerContext) error {
+	ws, err := gosocket.NewHandler(
+		gosocket.OnConnect(func(c *gosocket.Client, ctx *gosocket.HandlerContext) error {
 			return c.SendJSON(map[string]string{"status": "connected"})
 		}),
 	)
 
+	if err != nil {
+		panic(err)
+	}
+
 	r := gin.Default()
 
 	// WebSocket endpoint
-	r.GET("/ws", gin.WrapH(wsHandler))
+	r.GET("/ws", gin.WrapH(ws))
 
 	// HTTP API to send messages to WebSocket clients
 	r.POST("/api/broadcast", func(c *gin.Context) {
@@ -34,7 +35,7 @@ func main() {
 		}
 
 		// Broadcast to all WebSocket clients
-		wsHandler.Hub().BroadcastMessage(gosocket.NewMessage(
+		ws.Hub().BroadcastMessage(gosocket.NewMessage(
 			gosocket.TextMessage, data,
 		))
 
@@ -43,7 +44,7 @@ func main() {
 
 	// Get connected clients count
 	r.GET("/api/clients", func(c *gin.Context) {
-		clients := wsHandler.Hub().GetClients()
+		clients := ws.Hub().GetClients()
 		c.JSON(http.StatusOK, gin.H{"count": len(clients)})
 	})
 

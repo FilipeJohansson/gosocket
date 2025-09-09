@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2025 Filipe Johansson
 
-package server
+package gosocket
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
 	"time"
-
-	"github.com/FilipeJohansson/gosocket"
-	"github.com/FilipeJohansson/gosocket/handler"
 )
 
 // IServer defines the interface for a server that can manage client connections,
@@ -36,13 +35,13 @@ type IServer interface {
 	Broadcast(message []byte) error
 
 	// BroadcastMessage sends a message to all connected clients.
-	BroadcastMessage(message *gosocket.Message) error
+	BroadcastMessage(message *Message) error
 
 	// BroadcastData sends data to all connected clients.
 	BroadcastData(data interface{}) error
 
 	// BroadcastDataWithEncoding sends data to all connected clients with the given encoding.
-	BroadcastDataWithEncoding(data interface{}, encoding gosocket.EncodingType) error
+	BroadcastDataWithEncoding(data interface{}, encoding EncodingType) error
 
 	// BroadcastJSON sends JSON data to all connected clients.
 	BroadcastJSON(data interface{}) error
@@ -65,13 +64,13 @@ type IServer interface {
 	// Client management methods
 
 	// GetClients returns a list of all connected clients.
-	GetClients() []*gosocket.Client
+	GetClients() []*Client
 
 	// GetClient returns the client with the given ID.
-	GetClient(id string) *gosocket.Client
+	GetClient(id string) *Client
 
 	// GetClientsInRoom returns a list of all clients in the given room.
-	GetClientsInRoom(room string) []*gosocket.Client
+	GetClientsInRoom(room string) []*Client
 
 	// GetClientCount returns the number of connected clients.
 	GetClientCount() int
@@ -98,311 +97,27 @@ type IServer interface {
 }
 
 type Server struct {
-	handler   *handler.Handler
-	config    *gosocket.ServerConfig
+	handler   *Handler
+	config    *ServerConfig
 	server    *http.Server
 	isRunning bool
 	mu        sync.RWMutex
 }
 
 // New returns a new Server instance with default configuration.
-func New(options ...func(*Server)) *Server {
-	svr := &Server{
-		handler: handler.New(),
-		config:  gosocket.DefaultServerConfig(),
+func NewServer(options ...UniversalOption) (*Server, error) {
+	h, err := NewHandler()
+	if err != nil {
+		return nil, err
+	}
+
+	s := &Server{
+		handler: h,
+		config:  DefaultServerConfig(),
 		mu:      sync.RWMutex{},
 	}
 
-	for _, o := range options {
-		o(svr)
-	}
-
-	return svr
-}
-
-// ===== Functional Options =====
-
-// WithPort sets the port number for the server to listen on. If the port is outside the valid range
-// of 1-65535, a warning is printed to the console and the default port of 8080 is used instead.
-func WithPort(port int) func(*Server) {
-	return func(s *Server) {
-		if s.config == nil {
-			s.config = gosocket.DefaultServerConfig()
-		}
-
-		if port <= 0 || port > 65535 {
-			fmt.Printf("Warning: invalid port %d, using default 8080\n", port)
-			port = 8080
-		}
-
-		s.config.Port = port
-	}
-}
-
-// WithPath sets the path for the server to listen on. If the path is empty, it defaults to "/". If the path does not start with a slash, it is prepended with one.
-func WithPath(path string) func(*Server) {
-	return func(s *Server) {
-		if s.config == nil {
-			s.config = gosocket.DefaultServerConfig()
-		}
-
-		if path == "" {
-			path = "/"
-		}
-
-		if path[0] != '/' {
-			path = "/" + path
-		}
-
-		s.config.Path = path
-	}
-}
-
-// WithCORS sets whether the server should enable Cross-Origin Resource Sharing (CORS) for
-// incoming requests. If enabled, the server will include the Access-Control-Allow-Origin
-// header in all responses. Note that this is a simple implementation and does not handle
-// preflighted requests or other advanced CORS features. See https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS
-// for more information.
-func WithCORS(enabled bool) func(*Server) {
-	return func(s *Server) {
-		if s.config == nil {
-			s.config = gosocket.DefaultServerConfig()
-		}
-		s.config.EnableCORS = enabled
-	}
-}
-
-// WithSSL enables SSL/TLS for the server. The server will only serve requests
-// over HTTPS if this method is called with a valid certificate and key file.
-// If either the certificate or key file is empty, SSL/TLS will not be enabled.
-// The certificate and key file should be in PEM format.
-func WithSSL(certFile, keyFile string) func(*Server) {
-	return func(s *Server) {
-		if s.config == nil {
-			s.config = gosocket.DefaultServerConfig()
-		}
-
-		if certFile == "" || keyFile == "" {
-			fmt.Println("Warning: certFile or keyFile is empty, SSL not enabled")
-			return
-		}
-
-		s.config.EnableSSL = true
-		s.config.CertFile = certFile
-		s.config.KeyFile = keyFile
-	}
-}
-
-// WithMaxConnections sets the maximum number of connections the server should accept.
-// If max <= 0, it is set to the default of 1000.
-func WithMaxConnections(max int) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.WithMaxConnections(max)
-		handlerOption(s.handler)
-	}
-}
-
-// WithMessageSize sets the maximum message size for the server. If the size is less than or equal to 0, the default of 1024 is used.
-func WithMessageSize(size int64) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.WithMessageSize(size)
-		handlerOption(s.handler)
-	}
-}
-
-// WithTimeout sets the read and write timeouts for the server. If read is negative or write is negative,
-// the timeouts are set to 0.
-func WithTimeout(read, write time.Duration) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.WithTimeout(read, write)
-		handlerOption(s.handler)
-	}
-}
-
-// WithPingPong sets the ping and pong wait periods for the server. If pingPeriod or pongWait are negative,
-// the timeouts are set to 0.
-func WithPingPong(pingPeriod, pongWait time.Duration) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.WithPingPong(pingPeriod, pongWait)
-		handlerOption(s.handler)
-	}
-}
-
-// WithAllowedOrigins sets the allowed origins for the server. If the slice is empty,
-// the server will allow any origin. Otherwise, the server will only allow the specified
-// origins in the Origin header of incoming requests.
-func WithAllowedOrigins(origins []string) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.WithAllowedOrigins(origins)
-		handlerOption(s.handler)
-	}
-}
-
-// WithEncoding sets the default encoding for the server. This encoding will be used
-// to encode messages sent to clients if no encoding is specified. If the encoding
-// is not supported, the server will not start.
-func WithEncoding(encoding gosocket.EncodingType) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.WithEncoding(encoding)
-		handlerOption(s.handler)
-	}
-}
-
-// WithSerializer sets the serializer for the server to use with the given encoding.
-// If the serializer is nil, the server will not use this encoding.
-// The server will use the default encoding if no encoding is specified.
-func WithSerializer(encoding gosocket.EncodingType, serializer gosocket.Serializer) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.WithSerializer(encoding, serializer)
-		handlerOption(s.handler)
-	}
-}
-
-// WithJSONSerializer sets the JSON serializer for the server. This serializer
-// is used to encode and decode messages sent to and from clients. If the
-// serializer is nil, the server will not use this encoding.
-func WithJSONSerializer() func(*Server) {
-	return WithSerializer(gosocket.JSON, gosocket.JSONSerializer{})
-}
-
-// WithProtobufSerializer sets the Protobuf serializer for the server. This serializer
-// is used to encode and decode messages sent to and from clients. If the
-// serializer is nil, the server will not use this encoding.
-func WithProtobufSerializer() func(*Server) {
-	return WithSerializer(gosocket.Protobuf, gosocket.ProtobufSerializer{})
-}
-
-// WithRawSerializer sets the Raw serializer for the server. This serializer
-// is used to encode and decode messages sent to and from clients. If the
-// serializer is nil, the server will not use this encoding.
-func WithRawSerializer() func(*Server) {
-	return WithSerializer(gosocket.Raw, gosocket.RawSerializer{})
-}
-
-// WithMiddleware adds a middleware to the server. Middleware functions are executed
-// before the OnConnect, OnMessage, and OnDisconnect handlers. They can be used to
-// add authentication, logging, CORS support, or any other functionality that
-// is needed.
-func WithMiddleware(middleware gosocket.Middleware) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.WithMiddleware(middleware)
-		handlerOption(s.handler)
-	}
-}
-
-// WithAuth sets the authentication function for the server. The authentication
-// function is called for each new connection to the server. It should return a
-// map of user data and an error. If the error is not nil, the connection is
-// closed. The user data is stored in the client's User field and can be accessed
-// using the client.User() method.
-func WithAuth(authFunc gosocket.AuthFunc) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.WithAuth(authFunc)
-		handlerOption(s.handler)
-	}
-}
-
-// ===== HANDLERS =====
-
-// OnConnect sets the OnConnect handler for the server. This handler is called when
-// a new client connects to the server. The handler should return an error if the
-// connection should be closed. The handler is called after the authentication
-// function has been called and the client has been added to the server's list of
-// clients.
-func OnConnect(handlerFunc func(c *gosocket.Client, ctx *handler.HandlerContext) error) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.OnConnect(handlerFunc)
-		handlerOption(s.handler)
-	}
-}
-
-// OnDisconnect sets the OnDisconnect handler for the server. This handler is
-// called when a client disconnects from the server. The handler should return an
-// error if the disconnection should be treated as an error. The handler is called
-// after the client has been removed from the server's list of clients.
-func OnDisconnect(handlerFunc func(c *gosocket.Client, ctx *handler.HandlerContext) error) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.OnDisconnect(handlerFunc)
-		handlerOption(s.handler)
-	}
-}
-
-// OnMessage sets the OnMessage handler for the server. This handler is called when
-// a new message is received from a client. The handler should return an error if
-// the message should be treated as an error. The handler is called after the
-// message has been decoded and deserialized.
-func OnMessage(handlerFunc func(c *gosocket.Client, m *gosocket.Message, ctx *handler.HandlerContext) error) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.OnMessage(handlerFunc)
-		handlerOption(s.handler)
-	}
-}
-
-// OnRawMessage sets the OnRawMessage handler for the server. This handler is called
-// when a new message is received from a client. The handler should return an error
-// if the message should be treated as an error. The handler is called after the
-// message has been decoded, but before it has been deserialized.
-func OnRawMessage(handlerFunc func(c *gosocket.Client, m []byte, ctx *handler.HandlerContext) error) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.OnRawMessage(handlerFunc)
-		handlerOption(s.handler)
-	}
-}
-
-// OnJSONMessage sets the OnJSONMessage handler for the server. This handler is
-// called when a new JSON message is received from a client. The handler should
-// return an error if the message should be treated as an error. The handler is
-// called after the message has been decoded and parsed as JSON.
-func OnJSONMessage(handlerFunc func(c *gosocket.Client, m interface{}, ctx *handler.HandlerContext) error) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.OnJSONMessage(handlerFunc)
-		handlerOption(s.handler)
-	}
-}
-
-// OnProtobufMessage sets the OnProtobufMessage handler for the server. This
-// handler is called when a new Protobuf message is received from a client. The
-// handler should return an error if the message should be treated as an error.
-// The handler is called after the message has been decoded and parsed as
-// Protobuf.
-func OnProtobufMessage(handlerFunc func(c *gosocket.Client, m interface{}, ctx *handler.HandlerContext) error) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.OnProtobufMessage(handlerFunc)
-		handlerOption(s.handler)
-	}
-}
-
-// OnError sets the OnError handler for the server. This handler is called when an
-// error occurs. The handler should return an error if the error should be
-// treated as an error. The handler is called with the client that caused the
-// error and the error itself. The handler is called after the error has been
-// logged.
-func OnError(handlerFunc func(c *gosocket.Client, err error, ctx *handler.HandlerContext) error) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.OnError(handlerFunc)
-		handlerOption(s.handler)
-	}
-}
-
-// OnPing sets the OnPing handler for the server. This handler is called when a
-// ping message is sent by a client. The handler should return an error if the
-// ping should be treated as an error. The handler is called with the client that
-// sent the ping.
-func OnPing(handlerFunc func(c *gosocket.Client, ctx *handler.HandlerContext) error) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.OnPing(handlerFunc)
-		handlerOption(s.handler)
-	}
-}
-
-// OnPong sets the OnPong handler for the server. This handler is called when a pong message is sent by a client.
-// The handler should return an error if the pong should be treated as an error. The handler is called with the client that
-// sent the pong.
-func OnPong(handlerFunc func(c *gosocket.Client, ctx *handler.HandlerContext) error) func(*Server) {
-	return func(s *Server) {
-		handlerOption := handler.OnPong(handlerFunc)
-		handlerOption(s.handler)
-	}
+	return s.With(options...)
 }
 
 // ===== CONTROLLERS =====
@@ -416,52 +131,39 @@ func OnPong(handlerFunc func(c *gosocket.Client, ctx *handler.HandlerContext) er
 // Stop function, or by calling the Close method on the underlying net.Listener.
 // If the server is stopped, this function will return an error. If the server
 // encounters an error, this function will return an error.
-func (s *Server) Start() error {
+func (s *Server) Start() (err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("[GoSocket] server stopped with error: %w", err)
+		}
+	}()
+
 	s.mu.Lock()
 	if s.isRunning {
 		s.mu.Unlock()
 		return fmt.Errorf("server is already running")
 	}
 
-	if s.config.Port <= 0 || s.config.Port > 65535 {
-		return fmt.Errorf("invalid port: %d", s.config.Port)
-	}
-
-	if s.config.Path == "" {
-		// ? maybe don't check this? maybe the developer wants this path?
-		// s.config.Path = "/ws"
-	}
-
 	if len(s.handler.Serializers()) <= 0 {
-		s.handler.AddSerializer(gosocket.JSON, gosocket.JSONSerializer{}) // JSON as default serializer
+		s.handler.AddSerializer(JSON, JSONSerializer{}) // JSON as default serializer
 	}
 
 	go s.handler.Hub().Run()
 
 	mux := http.NewServeMux()
-
 	mux.HandleFunc(s.config.Path, s.handler.HandleWebSocket)
 
-	var handler http.Handler = mux
-	handler = s.handler.ApplyMiddlewares(handler)
+	var httpHandler http.Handler = mux
+	httpHandler = s.handler.ApplyMiddlewares(httpHandler)
 
-	s.server = &http.Server{
-		Addr:         fmt.Sprintf(":%d", s.config.Port),
-		Handler:      handler,
-		ReadTimeout:  s.handler.Config().ReadTimeout,
-		WriteTimeout: s.handler.Config().WriteTimeout,
-	}
+	s.server = s.buildHttpServer(httpHandler)
 
 	s.isRunning = true
 	s.mu.Unlock()
 
 	fmt.Printf("GoSocket server starting on port %d, path %s\n", s.config.Port, s.config.Path)
-
-	var err error
 	if s.config.EnableSSL {
-		if s.config.CertFile == "" || s.config.KeyFile == "" {
-			return fmt.Errorf("SSL enabled but cert/key files not provided")
-		}
+		s.server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		err = s.server.ListenAndServeTLS(s.config.CertFile, s.config.KeyFile)
 	} else {
 		err = s.server.ListenAndServe()
@@ -477,11 +179,7 @@ func (s *Server) Start() error {
 		return nil
 	}
 
-	if err != nil {
-		return fmt.Errorf("server error: %w", err)
-	}
-
-	return nil
+	return
 }
 
 // StartWithContext starts the GoSocket server and returns an error. It will start listening on the configured
@@ -492,36 +190,32 @@ func (s *Server) Start() error {
 // method on the underlying net.Listener. If the server is stopped, this function will return an error. If the
 // server encounters an error, this function will return an error. This function will also return an error if the
 // provided context is canceled.
-func (s *Server) StartWithContext(ctx context.Context) error {
+func (s *Server) StartWithContext(ctx context.Context) (err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("[GoSocket] server stopped with error: %w", err)
+		}
+	}()
+
 	s.mu.Lock()
 	if s.isRunning {
 		s.mu.Unlock()
 		return fmt.Errorf("server is already running")
 	}
 
-	if s.config.Port <= 0 || s.config.Port > 65535 {
-		return fmt.Errorf("invalid port: %d", s.config.Port)
-	}
-
 	if len(s.handler.Serializers()) <= 0 {
-		s.handler.AddSerializer(gosocket.JSON, gosocket.JSONSerializer{}) // JSON as default serializer
+		s.handler.AddSerializer(JSON, JSONSerializer{}) // JSON as default serializer
 	}
 
 	go s.handler.Hub().Run()
 
 	mux := http.NewServeMux()
-
 	mux.HandleFunc(s.config.Path, s.handler.HandleWebSocket)
 
 	var handler http.Handler = mux
 	handler = s.handler.ApplyMiddlewares(handler)
 
-	s.server = &http.Server{
-		Addr:         fmt.Sprintf(":%d", s.config.Port),
-		Handler:      handler,
-		ReadTimeout:  s.handler.Config().ReadTimeout,
-		WriteTimeout: s.handler.Config().WriteTimeout,
-	}
+	s.server = s.buildHttpServer(handler)
 
 	s.isRunning = true
 	s.mu.Unlock()
@@ -530,13 +224,8 @@ func (s *Server) StartWithContext(ctx context.Context) error {
 
 	go func() {
 		fmt.Printf("GoSocket server starting on port %d, path %s\n", s.config.Port, s.config.Path)
-
-		var err error
 		if s.config.EnableSSL {
-			if s.config.CertFile == "" || s.config.KeyFile == "" {
-				errChan <- fmt.Errorf("SSL enabled but cert/key files not provided")
-				return
-			}
+			s.server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 			err = s.server.ListenAndServeTLS(s.config.CertFile, s.config.KeyFile)
 		} else {
 			err = s.server.ListenAndServe()
@@ -574,10 +263,7 @@ func (s *Server) StartWithContext(ctx context.Context) error {
 		s.mu.Unlock()
 		s.handler.Hub().Stop()
 
-		if err != nil {
-			return fmt.Errorf("server error: %w", err)
-		}
-		return nil
+		return err
 	}
 }
 
@@ -630,6 +316,20 @@ func (s *Server) StopGracefully(timeout time.Duration) error {
 	return s.server.Shutdown(ctx)
 }
 
+// With applies the given options to the server. The options are applied in the
+// order they are given, and if an option returns an error, the server will not
+// be modified and the error will be returned. If no options are given, this
+// function will return the server as is, with no error.
+func (s *Server) With(options ...UniversalOption) (*Server, error) {
+	for _, o := range options {
+		if err := o(s); err != nil {
+			return nil, err
+		}
+	}
+
+	return s, nil
+}
+
 // ===== BROADCASTING =====
 
 // Broadcast sends a raw message to all connected clients. The message is sent as a
@@ -640,16 +340,14 @@ func (s *Server) Broadcast(message []byte) error {
 		return fmt.Errorf("server not properly initialized")
 	}
 
-	msg := gosocket.NewRawMessage(gosocket.TextMessage, message)
-	s.BroadcastMessage(msg)
-
-	return nil
+	msg := NewRawMessage(TextMessage, message)
+	return s.BroadcastMessage(msg)
 }
 
 // BroadcastMessage sends a Message to all connected clients. The message will be sent
-// to each client according to the client's gosocket.EncodingType. If the server is not properly
+// to each client according to the client's EncodingType. If the server is not properly
 // initialized, this function will return an error.
-func (s *Server) BroadcastMessage(message *gosocket.Message) error {
+func (s *Server) BroadcastMessage(message *Message) error {
 	if s.handler == nil || s.handler.Hub() == nil {
 		return fmt.Errorf("server not properly initialized")
 	}
@@ -683,7 +381,7 @@ func (s *Server) BroadcastData(data interface{}) error {
 // the serializer is not found, an error is returned. If serialization fails, an
 // error is returned. The data is sent as a websocket.BinaryMessage. If the server
 // is not properly initialized, this function will return an error.
-func (s *Server) BroadcastDataWithEncoding(data interface{}, encoding gosocket.EncodingType) error {
+func (s *Server) BroadcastDataWithEncoding(data interface{}, encoding EncodingType) error {
 	serializer := s.handler.Serializers()[encoding]
 	if serializer == nil {
 		return fmt.Errorf("serializer not found for encoding: %d", encoding)
@@ -726,7 +424,7 @@ func (s *Server) BroadcastToRoom(room string, message []byte) error {
 		return fmt.Errorf("server not properly initialized")
 	}
 
-	msg := gosocket.NewRawMessage(gosocket.TextMessage, message)
+	msg := NewRawMessage(TextMessage, message)
 	msg.Room = room
 	s.handler.Hub().BroadcastToRoom(room, msg)
 
@@ -776,13 +474,13 @@ func (s *Server) BroadcastToRoomProtobuf(room string, data interface{}) error {
 
 // GetClients returns all clients currently connected to the server. If the server is not properly
 // initialized, an empty slice is returned.
-func (s *Server) GetClients() []*gosocket.Client {
+func (s *Server) GetClients() []*Client {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return []*gosocket.Client{}
+		return []*Client{}
 	}
 
 	hubClients := s.handler.Hub().GetClients()
-	clients := make([]*gosocket.Client, 0, len(hubClients))
+	clients := make([]*Client, 0, len(hubClients))
 	for client := range hubClients {
 		clients = append(clients, client)
 	}
@@ -792,7 +490,7 @@ func (s *Server) GetClients() []*gosocket.Client {
 
 // GetClient returns a client by its ID. If no client with the given ID exists,
 // nil is returned. This method is safe to call concurrently.
-func (s *Server) GetClient(id string) *gosocket.Client {
+func (s *Server) GetClient(id string) *Client {
 	clients := s.GetClients()
 	for _, client := range clients {
 		if client.ID == id {
@@ -805,9 +503,9 @@ func (s *Server) GetClient(id string) *gosocket.Client {
 // GetClientsInRoom returns all clients in the specified room. If the server is not properly
 // initialized or the room does not exist, an empty slice is returned. This method is safe to call
 // concurrently.
-func (s *Server) GetClientsInRoom(room string) []*gosocket.Client {
+func (s *Server) GetClientsInRoom(room string) []*Client {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return []*gosocket.Client{}
+		return []*Client{}
 	}
 
 	return s.handler.Hub().GetRoomClients(room)
@@ -904,4 +602,103 @@ func (s *Server) LeaveRoom(clientID, room string) error {
 	}
 
 	return client.LeaveRoom(room)
+}
+
+func (s *Server) Handler() *Handler {
+	return s.handler
+}
+
+func (s *Server) buildHttpServer(httpHandler http.Handler) *http.Server {
+	server := &http.Server{
+		Addr:         fmt.Sprintf(":%d", s.config.Port),
+		Handler:      httpHandler,
+		ReadTimeout:  s.handler.Config().ReadTimeout,
+		WriteTimeout: s.handler.Config().WriteTimeout,
+	}
+
+	if s.config.EnableSSL {
+		server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+
+	return server
+}
+
+// ===== Functional Options =====
+
+// WithPort sets the port number for the server to listen on. If the port is outside the valid range
+// of 1-65535, a warning is printed to the console and the default port of 8080 is used instead.
+func WithPort(port int) UniversalOption {
+	return func(h HasHandler) error {
+		server, ok := h.(*Server)
+		if !ok {
+			return fmt.Errorf("WithPort can only be used with Server, got %T", h)
+		}
+
+		if port <= 0 || port > 65535 {
+			return fmt.Errorf("[WithPort] invalid port: %d", port)
+		}
+
+		server.config.Port = port
+		return nil
+	}
+}
+
+// WithPath sets the path for the server to listen on. If the path is empty, it defaults to "/". If the path does not start with a slash, it is prepended with one.
+func WithPath(path string) UniversalOption {
+	return func(h HasHandler) error {
+		server, ok := h.(*Server)
+		if !ok {
+			return fmt.Errorf("WithPath can only be used with Server, got %T", h)
+		}
+
+		if path == "" {
+			path = "/"
+		}
+
+		if path[0] != '/' {
+			path = "/" + path
+		}
+
+		server.config.Path = path
+		return nil
+	}
+}
+
+// WithCORS sets whether the server should enable Cross-Origin Resource Sharing (CORS) for
+// incoming requests. If enabled, the server will include the Access-Control-Allow-Origin
+// header in all responses. Note that this is a simple implementation and does not handle
+// preflighted requests or other advanced CORS features. See https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS
+// for more information.
+func WithCORS(enabled bool) UniversalOption {
+	return func(h HasHandler) error {
+		server, ok := h.(*Server)
+		if !ok {
+			return fmt.Errorf("WithCORS can only be used with Server, got %T", h)
+		}
+
+		server.config.EnableCORS = enabled
+		return nil
+	}
+}
+
+// WithSSL enables SSL/TLS for the server. The server will only serve requests
+// over HTTPS if this method is called with a valid certificate and key file.
+// If either the certificate or key file is empty, SSL/TLS will not be enabled.
+// The certificate and key file should be in PEM format.
+func WithSSL(certFile, keyFile string) UniversalOption {
+	return func(h HasHandler) error {
+		server, ok := h.(*Server)
+		if !ok {
+			return fmt.Errorf("WithSSL can only be used with Server, got %T", h)
+		}
+
+		if certFile == "" || keyFile == "" {
+			return errors.New("[WithSSL] certFile or keyFile is empty")
+		}
+
+		server.config.EnableSSL = true
+		server.config.CertFile = certFile
+		server.config.KeyFile = keyFile
+		return nil
+	}
 }

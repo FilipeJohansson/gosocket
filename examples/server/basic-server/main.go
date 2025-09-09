@@ -7,29 +7,31 @@ import (
 	"log"
 
 	"github.com/FilipeJohansson/gosocket"
-	"github.com/FilipeJohansson/gosocket/handler"
-	"github.com/FilipeJohansson/gosocket/server"
 )
 
 func main() {
-	ws := server.New(
-		server.WithPort(8080),
-		server.WithPath("/ws"),
-		server.OnConnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
+	ws, err := gosocket.NewServer(
+		gosocket.WithPort(-1),
+		gosocket.WithPath("/ws"),
+		gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 			fmt.Printf("Client connected: %s\n", client.ID)
 			return nil
 		}),
-		server.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *handler.HandlerContext) error {
+		gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.HandlerContext) error {
 			fmt.Printf("Received: %s\n", string(message.RawData))
 			// Echo back
 			client.Send(message.RawData)
 			return nil
 		}),
-		server.OnDisconnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
+		gosocket.OnDisconnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 			fmt.Printf("Client disconnected: %s\n", client.ID)
 			return nil
 		}),
 	)
+
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	log.Fatal(ws.Start())
 }

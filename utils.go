@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+type UniversalOption func(HasHandler) error
+
+type HasHandler interface {
+	Handler() *Handler
+}
+
 type IWebSocketConn interface {
 	Close() error
 	WriteMessage(messageType int, data []byte) error

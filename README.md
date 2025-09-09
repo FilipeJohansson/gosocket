@@ -8,9 +8,9 @@ Stop writing WebSocket boilerplate. Start building features.
 
 ```go
 // That's it. You have a working WebSocket server.
-ws := server.New(
-    server.WithPort(8080),
-    server.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *handler.HandlerContext) error {
+ws, _ := gosocket.NewServer(
+    gosocket.WithPort(8080),
+    gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.HandlerContext) error {
         client.Send(message.RawData) // Echo back
         return nil
     }),
@@ -49,28 +49,30 @@ import (
     "fmt"
     "log"
     "github.com/FilipeJohansson/gosocket"
-    "github.com/FilipeJohansson/gosocket/handler"
-    "github.com/FilipeJohansson/gosocket/server"
 )
 
 func main() {
-    ws := server.New(
-        server.WithPort(8080),
-        server.WithPath("/ws"),
-        server.OnConnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
+    ws, err := gosocket.NewServer(
+        gosocket.WithPort(8080),
+        gosocket.WithPath("/ws"),
+        gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
             fmt.Printf("Client %s connected\n", client.ID)
             return nil
         }),
-        server.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *handler.HandlerContext) error {
+        gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.HandlerContext) error {
             // Broadcast to all clients
             ctx.BroadcastToAll(gosocket.NewRawMessage(gosocket.TextMessage, message.RawData))
             return nil
         }),
-        server.OnDisconnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
+        gosocket.OnDisconnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
             fmt.Printf("Client %s disconnected\n", client.ID)
             return nil
         }),
     )
+
+    if err != nil {
+        // something wrong with the server configuration
+    }
     
     log.Fatal(ws.Start())
 }
@@ -85,7 +87,6 @@ package main
 import (
     "net/http"
     "github.com/FilipeJohansson/gosocket"
-    "github.com/FilipeJohansson/gosocket/handler"
 )
 
 func main() {
@@ -93,14 +94,18 @@ func main() {
     http.HandleFunc("/api/users", getUsersHandler)
     
     // Add WebSocket endpoint
-    handler := handler.New(
-        handler.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *handler.HandlerContext) error {
+    ws, err := gosocket.NewHandler(
+        gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.HandlerContext) error {
             client.Send(message.RawData)
             return nil
         }),
     )
+
+    if err != nil {
+        // something wrong with the handler configuration
+    }
     
-    http.Handle("/ws", handler)
+    http.Handle("/ws", ws)
     http.ListenAndServe(":8080", nil)
 }
 ```
@@ -110,11 +115,11 @@ func main() {
 Add authentication, logging, CORS, and more:
 
 ```go
-ws := server.New(
-    server.WithPort(8080),
-    server.WithMiddleware(AuthMiddleware),
-    server.WithMiddleware(LoggingMiddleware),
-    server.OnConnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
+ws, _ := gosocket.NewServer(
+    gosocket.WithPort(8080),
+    gosocket.WithMiddleware(AuthMiddleware),
+    gosocket.WithMiddleware(LoggingMiddleware),
+    gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
         fmt.Printf("Authenticated client connected: %s\n", client.ID)
         return nil
     }),
@@ -124,12 +129,12 @@ ws := server.New(
 ## Rooms & Broadcasting
 
 ```go
-server.OnConnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
+gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
     client.JoinRoom("general")
     return nil
 })
 
-server.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *handler.HandlerContext) error {
+gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.HandlerContext) error {
     // Send to specific room
     ctx.BroadcastToRoom("general", message.RawData)
     

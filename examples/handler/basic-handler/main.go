@@ -7,27 +7,30 @@ import (
 	"net/http"
 
 	"github.com/FilipeJohansson/gosocket"
-	"github.com/FilipeJohansson/gosocket/handler"
 )
 
 func main() {
-	handler := handler.New(
-		handler.OnConnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
+	ws, err := gosocket.NewHandler(
+		gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 			fmt.Printf("Client connected: %s\n", client.ID)
 			return nil
 		}),
-		handler.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *handler.HandlerContext) error {
+		gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.HandlerContext) error {
 			fmt.Printf("Received: %s\n", string(message.RawData))
 			// Echo back
 			client.Send(message.RawData)
 			return nil
 		}),
-		handler.OnDisconnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
+		gosocket.OnDisconnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 			fmt.Printf("Client disconnected: %s\n", client.ID)
 			return nil
 		}),
 	)
 
-	http.Handle("/ws", handler)
+	if err != nil {
+		panic(err)
+	}
+
+	http.Handle("/ws", ws)
 	http.ListenAndServe(":8080", nil)
 }

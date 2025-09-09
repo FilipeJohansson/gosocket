@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/FilipeJohansson/gosocket"
-	"github.com/FilipeJohansson/gosocket/handler"
-	"github.com/FilipeJohansson/gosocket/server"
 )
 
 type Message struct {
@@ -25,12 +23,16 @@ type Notification struct {
 }
 
 func main() {
-	srv := server.New(
-		server.WithPort(8081),
-		server.WithPath("/ws"),
-		server.OnConnect(onConnect),
-		server.OnJSONMessage(onMessage),
+	ws, err := gosocket.NewServer(
+		gosocket.WithPort(8081),
+		gosocket.WithPath("/ws"),
+		gosocket.OnConnect(onConnect),
+		gosocket.OnJSONMessage(onMessage),
 	)
+
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	http.HandleFunc("/", servePage)
 
@@ -38,7 +40,7 @@ func main() {
 	go func() {
 		for {
 			time.Sleep(15 * time.Second)
-			srv.BroadcastJSON(Message{
+			ws.BroadcastJSON(Message{
 				Type: "notification",
 				Data: Notification{
 					Title: "System Alert",
@@ -50,14 +52,14 @@ func main() {
 	}()
 
 	go func() {
-		log.Fatal(srv.Start())
+		log.Fatal(ws.Start())
 	}()
 
 	log.Println("Notifications server at http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func onConnect(client *gosocket.Client, ctx *handler.HandlerContext) error {
+func onConnect(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 	return client.SendJSON(Message{
 		Type: "notification",
 		Data: Notification{
@@ -68,7 +70,7 @@ func onConnect(client *gosocket.Client, ctx *handler.HandlerContext) error {
 	})
 }
 
-func onMessage(client *gosocket.Client, data interface{}, ctx *handler.HandlerContext) error {
+func onMessage(client *gosocket.Client, data interface{}, ctx *gosocket.HandlerContext) error {
 	jsonBytes, _ := json.Marshal(data)
 	var msg Message
 	json.Unmarshal(jsonBytes, &msg)

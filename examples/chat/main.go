@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/FilipeJohansson/gosocket"
-	"github.com/FilipeJohansson/gosocket/handler"
-	"github.com/FilipeJohansson/gosocket/server"
 )
 
 // Message types for the chat
@@ -36,14 +34,18 @@ const (
 )
 
 func main() {
-	server := server.New(
-		server.WithPort(8081),
-		server.WithPath("/ws"),
-		server.WithJSONSerializer(),
-		server.OnConnect(handleConnect),
-		server.OnDisconnect(handleDisconnect),
-		server.OnJSONMessage(handleMessage),
+	ws, err := gosocket.NewServer(
+		gosocket.WithPort(8081),
+		gosocket.WithPath("/ws"),
+		gosocket.WithJSONSerializer(),
+		gosocket.OnConnect(handleConnect),
+		gosocket.OnDisconnect(handleDisconnect),
+		gosocket.OnJSONMessage(handleMessage),
 	)
+
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Serve static files for the chat frontend
 	http.HandleFunc("/", serveHome)
@@ -54,7 +56,7 @@ func main() {
 	// Start WebSocket server in a goroutine
 	go func() {
 		fmt.Println("Starting GoSocket server...")
-		if err := server.Start(); err != nil {
+		if err := ws.Start(); err != nil {
 			log.Fatal("Failed to start WebSocket server:", err)
 		}
 	}()
@@ -64,7 +66,7 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func handleConnect(client *gosocket.Client, ctx *handler.HandlerContext) error {
+func handleConnect(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 	fmt.Printf("Client connected: %s\n", client.ID)
 
 	// Send welcome message
@@ -77,7 +79,7 @@ func handleConnect(client *gosocket.Client, ctx *handler.HandlerContext) error {
 	return client.SendJSON(welcome)
 }
 
-func handleDisconnect(client *gosocket.Client, ctx *handler.HandlerContext) error {
+func handleDisconnect(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 	fmt.Printf("Client disconnected: %s\n", client.ID)
 
 	// Get user data
@@ -107,7 +109,7 @@ func handleDisconnect(client *gosocket.Client, ctx *handler.HandlerContext) erro
 	return nil
 }
 
-func handleMessage(client *gosocket.Client, data interface{}, ctx *handler.HandlerContext) error {
+func handleMessage(client *gosocket.Client, data interface{}, ctx *gosocket.HandlerContext) error {
 	// Parse the JSON message
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {
@@ -133,7 +135,7 @@ func handleMessage(client *gosocket.Client, data interface{}, ctx *handler.Handl
 	}
 }
 
-func handleJoinRoom(client *gosocket.Client, msg *ChatMessage, ctx *handler.HandlerContext) error {
+func handleJoinRoom(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.HandlerContext) error {
 	if msg.Room == "" || msg.User == "" {
 		return sendErrorMessage(client, "Room and username are required")
 	}
@@ -177,7 +179,7 @@ func handleJoinRoom(client *gosocket.Client, msg *ChatMessage, ctx *handler.Hand
 	return nil
 }
 
-func handleLeaveRoom(client *gosocket.Client, msg *ChatMessage, ctx *handler.HandlerContext) error {
+func handleLeaveRoom(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.HandlerContext) error {
 	username := getUsernameFromClient(client)
 	if username == "" {
 		return sendErrorMessage(client, "You must set a username first")
@@ -218,7 +220,7 @@ func handleLeaveRoom(client *gosocket.Client, msg *ChatMessage, ctx *handler.Han
 	return nil
 }
 
-func handleChatMessage(client *gosocket.Client, msg *ChatMessage, ctx *handler.HandlerContext) error {
+func handleChatMessage(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.HandlerContext) error {
 	username := getUsernameFromClient(client)
 	if username == "" {
 		return sendErrorMessage(client, "You must join a room first")
@@ -257,7 +259,7 @@ func handleChatMessage(client *gosocket.Client, msg *ChatMessage, ctx *handler.H
 	return nil
 }
 
-func broadcastUserList(ctx *handler.HandlerContext, room string) {
+func broadcastUserList(ctx *gosocket.HandlerContext, room string) {
 	clients := ctx.GetClientsInRoom(room)
 	var users []string
 
