@@ -1,103 +1,204 @@
-# GoSocket
+# 🚀 GoSocket
 
-Setting up WebSocket servers in Go usually means writing a lot of boilerplate code. You need to handle connections, manage clients, implement broadcasting, deal with rooms, and handle different message formats. **GoSocket** abstracts all of this away.
+*The simplest way to add WebSockets to your Go application*
 
-## Overview
+[![Go Version](https://img.shields.io/github/go-mod/go-version/FilipeJohansson/gosocket)](https://github.com/FilipeJohansson/gosocket) [![GoDoc](https://godoc.org/github.com/FilipeJohansson/gosocket?status.svg)](https://godoc.org/github.com/FilipeJohansson/gosocket) [![Go Report Card](https://goreportcard.com/badge/github.com/FilipeJohansson/gosocket)](https://goreportcard.com/report/github.com/FilipeJohansson/gosocket) [![License](https://img.shields.io/github/license/FilipeJohansson/gosocket)](LICENSE)
 
-A simple WebSocket abstraction for Go that gets you up and running in minutes.
-
-**GoSocket** provides:
-- **Simple setup**: Install package, write 5-10 lines of code, have a working WebSocket server
-- **Multiple encoding support**: JSON (ready), Protobuf and MessagePack (planned), or raw binary data
-- **Built-in rooms**: Join/leave rooms without manual management  
-- **Broadcasting**: Send to all clients, specific rooms, or individual clients
-- **Middleware support**: Add auth, logging, CORS, whatever you need
-- **Graceful shutdown**: Clean connection handling when stopping
-- **Multiple servers**: Run chat, notifications, and admin panels on different ports simultaneously
-
-## Installing
-First, use `go get` to install the latest version of the library.
-
-```
-go get -u github.com/FilipeJohansson/gosocket@latest
-```
-
-Next, include **GoSocket** in your application:
-```go
-import "github.com/FilipeJohansson/gosocket"
-```
-
-## Quick Start
-
-### Use as a server
+Stop writing WebSocket boilerplate. Start building features.
 
 ```go
-ws := gosocket.NewServer()
-
-ws.WithPort(8080).
-    WithPath("/ws").
-    OnConnect(func(client *gosocket.Client) error {
-        fmt.Printf("Client connected: %s\n", client.ID)
+// That's it. You have a working WebSocket server.
+ws := server.New(
+    server.WithPort(8080),
+    server.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *handler.HandlerContext) error {
+        client.Send(message.RawData) // Echo back
         return nil
-    }).
-    OnMessage(func(client *gosocket.Client, message *gosocket.Message) error {
-        fmt.Printf("Received: %s\n", string(message.RawData))
-        // Echo back
-        client.Send(message.RawData)
-        return nil
-    }).
-    OnDisconnect(func(client *gosocket.Client) error {
-        fmt.Printf("Client disconnected: %s\n", client.ID)
-        return nil
-    })
-
+    }),
+)
 log.Fatal(ws.Start())
 ```
 
-### Use as a handler
+---
 
-```go
-handler := gosocket.NewHandler()
+## Why GoSocket?
 
-handler.
-    OnConnect(func(client *gosocket.Client) error {
-        fmt.Printf("Client connected: %s\n", client.ID)
-        return nil
-    }).
-    OnMessage(func(client *gosocket.Client, message *gosocket.Message) error {
-        fmt.Printf("Received: %s\n", string(message.RawData))
-        // Echo back
-        client.Send(message.RawData)
-        return nil
-    }).
-    OnDisconnect(func(client *gosocket.Client) error {
-        fmt.Printf("Client disconnected: %s\n", client.ID)
-        return nil
-    })
+GoSocket focuses on **developer experience** and **getting started quickly**:
 
-http.Handle("/ws", handler)
-http.ListenAndServe(":8080", nil)
+- **Minimal boilerplate** - Get a WebSocket server running in a few lines
+- **Built-in features** - Rooms, broadcasting, and client management included
+- **Middleware support**: Add auth, logging, CORS, whatever you need
+- **Simple API** - Intuitive methods that do what you expect
+- **Production ready** - Built on battle-tested WebSocket foundations
+- **Flexible** - Use standalone or integrate with existing HTTP servers
+- **Multiple servers**: Run chat, notifications, and admin panels on different ports simultaneously
+
+## Quick Start
+
+### Installation
+```bash
+go get -u github.com/FilipeJohansson/gosocket@latest
 ```
 
-For more examples, see [examples](examples).
+### Standalone Server
+Perfect for dedicated WebSocket services:
 
-## Current Status
+```go
+package main
 
-Planning to launch v1.0.0 soon. Until then, you can start testing our pre-prod versions.
+import (
+    "fmt"
+    "log"
+    "github.com/FilipeJohansson/gosocket"
+    "github.com/FilipeJohansson/gosocket/handler"
+    "github.com/FilipeJohansson/gosocket/server"
+)
+
+func main() {
+    ws := server.New(
+        server.WithPort(8080),
+        server.WithPath("/ws"),
+        server.OnConnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
+            fmt.Printf("Client %s connected\n", client.ID)
+            return nil
+        }),
+        server.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *handler.HandlerContext) error {
+            // Broadcast to all clients
+            ctx.BroadcastToAll(gosocket.NewRawMessage(gosocket.TextMessage, message.RawData))
+            return nil
+        }),
+        server.OnDisconnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
+            fmt.Printf("Client %s disconnected\n", client.ID)
+            return nil
+        }),
+    )
+    
+    log.Fatal(ws.Start())
+}
+```
+
+### Integrate with Existing HTTP Server
+Perfect for adding real-time features to REST APIs:
+
+```go
+package main
+
+import (
+    "net/http"
+    "github.com/FilipeJohansson/gosocket"
+    "github.com/FilipeJohansson/gosocket/handler"
+)
+
+func main() {
+    // Your existing routes
+    http.HandleFunc("/api/users", getUsersHandler)
+    
+    // Add WebSocket endpoint
+    handler := handler.New(
+        handler.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *handler.HandlerContext) error {
+            client.Send(message.RawData)
+            return nil
+        }),
+    )
+    
+    http.Handle("/ws", handler)
+    http.ListenAndServe(":8080", nil)
+}
+```
+
+## Middleware Support
+
+Add authentication, logging, CORS, and more:
+
+```go
+ws := server.New(
+    server.WithPort(8080),
+    server.WithMiddleware(AuthMiddleware),
+    server.WithMiddleware(LoggingMiddleware),
+    server.OnConnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
+        fmt.Printf("Authenticated client connected: %s\n", client.ID)
+        return nil
+    }),
+)
+```
+
+## Rooms & Broadcasting
+
+```go
+server.OnConnect(func(client *gosocket.Client, ctx *handler.HandlerContext) error {
+    client.JoinRoom("general")
+    return nil
+})
+
+server.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *handler.HandlerContext) error {
+    // Send to specific room
+    ctx.BroadcastToRoom("general", message.RawData)
+    
+    // Send to specific client
+    client.Send([]byte("ACK"))
+    
+    // Send to everyone
+    ctx.BroadcastToAll([]byte("Global announcement"))
+    
+    return nil
+})
+```
+
+## Real-World Examples
+
+- **[Chat Application](examples/chat)** - Multi-room chat with rooms
+- **[Live Notifications](examples/notifications)** - Push notifications to web clients
+- **[Game Lobby](examples/game-lobby)** - Real-time multiplayer coordination
+- **[Stock Ticker](examples/stock-ticker)** - Live data streaming
+- **[Middleware Example](examples/server/with-middlewares)** - Authentication and logging middleware
+- **[Gin Integration](examples/gin-integration)** - Add WebSockets to Gin apps
+
+## Performance
+
+GoSocket is built for production use:
+
+- **Memory efficient**: Minimal allocation per connection
+- **Fast**: Built on proven WebSocket libraries
+- **Scalable**: Handle thousands of concurrent connections
+- **Reliable**: Comprehensive error handling
+
+## Features
+
+- **Quick Setup** - Minimal code to get started
+- **Built-in Rooms** - Join/leave rooms without manual management  
+- **Broadcasting** - Send to all clients, rooms, or individuals
+- **Flexible Integration** - Standalone server or HTTP handler
+- **Multiple Encodings** - JSON ready, Protobuf & MessagePack coming
+- **Production Ready** - Graceful shutdowns and error handling
+
+## Roadmap
+
+- [x] **v0.1**: Basic WebSocket server + middleware support
+- [x] **v0.2**: Rooms and broadcasting  
+- [x] **v0.3**: Functional options pattern
+- [ ] **v0.4**: Protobuf & MessagePack support
+- [ ] **v1.0**: Production ready
 
 ## Contributing
 
-This project is actively being developed. We're looking for contributions in:
+We're actively looking for contributors! Areas where you can help:
 
-- Documentation: Help improve examples and API documentation
-- Testing: Write tests for edge cases and performance scenarios
-- Serializers: Implement Protobuf and MessagePack support
+- **Documentation**: Improve examples and guides
+- **Testing**: Write tests and benchmarks  
+- **Features**: Implement Protobuf/MessagePack serializers
+- **Bug fixes**: Report and fix issues
 
-1. Check out the current structure in the code
-2. Open an issue to discuss what you'd like to work on
-3. Focus areas: core functionality, serializers, and comprehensive testing
-
+Check out [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
 
 ## License
 
-**GoSocket** is released under the MIT license. See [LICENSE](LICENSE).
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+<div align="center">
+
+**Love GoSocket?** Give us a ⭐ and help spread the word!
+
+[🐦 Tweet](https://twitter.com/intent/tweet?text=Check%20out%20GoSocket%20-%20the%20simplest%20way%20to%20add%20WebSockets%20to%20Go%20apps!%20https://github.com/FilipeJohansson/gosocket) • [📺 Demo](examples/) • [💬 Discussions](https://github.com/FilipeJohansson/gosocket/discussions)
+
+</div>
