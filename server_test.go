@@ -1,7 +1,7 @@
 package gosocket
 
 import (
-	"fmt"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -345,12 +345,12 @@ func TestServer_WithTimeout(t *testing.T) {
 
 func TestServer_WithPingPong(t *testing.T) {
 	tests := []struct {
-		name           string
-		pingPeriod     time.Duration
-		pongWait       time.Duration
-		expectError    bool
-		expectErrorMsg string
-		expected       func(*Server)
+		name          string
+		pingPeriod    time.Duration
+		pongWait      time.Duration
+		isExpectError bool
+		expectError   error
+		expected      func(*Server)
 	}{
 		{
 			name:       "sets ping period and pong wait",
@@ -362,36 +362,37 @@ func TestServer_WithPingPong(t *testing.T) {
 			},
 		},
 		{
-			name:        "sets zero ping period and pong wait",
-			pingPeriod:  0,
-			pongWait:    0,
-			expectError: true,
-			expected:    nil,
+			name:          "sets zero ping period and pong wait",
+			pingPeriod:    0,
+			pongWait:      0,
+			isExpectError: true,
+			expectError:   errors.New("[WithPingPong] ping and pong wait periods must be greater than 0"),
+			expected:      nil,
 		},
 		{
-			name:           "sets negative ping period and pong wait",
-			pingPeriod:     -10 * time.Second,
-			pongWait:       -20 * time.Second,
-			expectError:    true,
-			expectErrorMsg: "[WithPingPong] ping and pong wait periods must be greater than 0",
-			expected:       nil,
+			name:          "sets negative ping period and pong wait",
+			pingPeriod:    -10 * time.Second,
+			pongWait:      -20 * time.Second,
+			isExpectError: true,
+			expectError:   errors.New("[WithPingPong] ping and pong wait periods must be greater than 0"),
+			expected:      nil,
 		},
 		{
-			name:           "sets pong wait less than ping period",
-			pingPeriod:     10 * time.Second,
-			pongWait:       5 * time.Second,
-			expectError:    true,
-			expectErrorMsg: "[WithPingPong] pong wait must be greater than ping period",
-			expected:       nil,
+			name:          "sets pong wait less than ping period",
+			pingPeriod:    10 * time.Second,
+			pongWait:      5 * time.Second,
+			isExpectError: true,
+			expectError:   errors.New("[WithPingPong] pong wait must be greater than ping period"),
+			expected:      nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, err := NewServer(WithPingPong(tt.pingPeriod, tt.pongWait))
-			if tt.expectError {
+			if tt.isExpectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectErrorMsg)
+				assert.Contains(t, err.Error(), tt.expectError.Error())
 			} else {
 				assert.NoError(t, err)
 				if tt.expected != nil {
@@ -577,7 +578,7 @@ func TestServer_WithAuth(t *testing.T) {
 	authFunc := func(r *http.Request) (map[string]interface{}, error) {
 		token := r.Header.Get("Authorization")
 		if token == "" {
-			return nil, fmt.Errorf("missing authorization header")
+			return nil, errors.New("missing authorization header")
 		}
 		return map[string]interface{}{"user_id": "123"}, nil
 	}
@@ -675,10 +676,11 @@ func TestServer_EventHandlers(t *testing.T) {
 
 func TestServer_Broadcast(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupServer   func() *Server
-		message       []byte
-		expectedError string
+		name            string
+		setupServer     func() *Server
+		message         []byte
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "broadcasts message successfully",
@@ -692,8 +694,8 @@ func TestServer_Broadcast(t *testing.T) {
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			message:       []byte("test message"),
-			expectedError: "",
+			message:         []byte("test message"),
+			isExpectedError: false,
 		},
 		{
 			name: "fails when server not initialized",
@@ -705,8 +707,9 @@ func TestServer_Broadcast(t *testing.T) {
 				server.handler = nil
 				return server
 			},
-			message:       []byte("test message"),
-			expectedError: "server not properly initialized",
+			message:         []byte("test message"),
+			isExpectedError: true,
+			expectedError:   errors.New("server not properly initialized"),
 		},
 		{
 			name: "fails when hub is nil",
@@ -718,8 +721,9 @@ func TestServer_Broadcast(t *testing.T) {
 				server.handler.SetHub(nil)
 				return server
 			},
-			message:       []byte("test message"),
-			expectedError: "server not properly initialized",
+			message:         []byte("test message"),
+			isExpectedError: true,
+			expectedError:   errors.New("server not properly initialized"),
 		},
 	}
 
@@ -728,14 +732,14 @@ func TestServer_Broadcast(t *testing.T) {
 			server := tt.setupServer()
 			err := server.Broadcast(tt.message)
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 				if mockHub, ok := server.handler.Hub().(*MockHub); ok {
 					mockHub.AssertExpectations(t)
 				}
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
@@ -743,10 +747,11 @@ func TestServer_Broadcast(t *testing.T) {
 
 func TestServer_BroadcastMessage(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupServer   func() *Server
-		message       *Message
-		expectedError string
+		name            string
+		setupServer     func() *Server
+		message         *Message
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "broadcasts message successfully",
@@ -760,8 +765,8 @@ func TestServer_BroadcastMessage(t *testing.T) {
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			message:       NewMessage(TextMessage, "test"),
-			expectedError: "",
+			message:         NewMessage(TextMessage, "test"),
+			isExpectedError: false,
 		},
 		{
 			name: "fails when server not initialized",
@@ -773,8 +778,9 @@ func TestServer_BroadcastMessage(t *testing.T) {
 				server.handler = nil
 				return server
 			},
-			message:       NewMessage(TextMessage, "test"),
-			expectedError: "server not properly initialized",
+			message:         NewMessage(TextMessage, "test"),
+			isExpectedError: true,
+			expectedError:   errors.New("server not properly initialized"),
 		},
 	}
 
@@ -783,14 +789,14 @@ func TestServer_BroadcastMessage(t *testing.T) {
 			server := tt.setupServer()
 			err := server.BroadcastMessage(tt.message)
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 				if mockHub, ok := server.handler.Hub().(*MockHub); ok {
 					mockHub.AssertExpectations(t)
 				}
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
@@ -798,10 +804,11 @@ func TestServer_BroadcastMessage(t *testing.T) {
 
 func TestServer_BroadcastJSON(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupServer   func() *Server
-		data          interface{}
-		expectedError string
+		name            string
+		setupServer     func() *Server
+		data            interface{}
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "broadcasts JSON successfully",
@@ -815,8 +822,8 @@ func TestServer_BroadcastJSON(t *testing.T) {
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			data:          map[string]string{"key": "value"},
-			expectedError: "",
+			data:            map[string]string{"key": "value"},
+			isExpectedError: false,
 		},
 		{
 			name: "fails with invalid JSON data",
@@ -829,8 +836,9 @@ func TestServer_BroadcastJSON(t *testing.T) {
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			data:          make(chan int), // channels can't be marshaled to JSON
-			expectedError: "failed to marshal JSON",
+			data:            make(chan int), // channels can't be marshaled to JSON
+			isExpectedError: true,
+			expectedError:   errors.New("failed to marshal JSON"),
 		},
 	}
 
@@ -839,14 +847,14 @@ func TestServer_BroadcastJSON(t *testing.T) {
 			server := tt.setupServer()
 			err := server.BroadcastJSON(tt.data)
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 				if mockHub, ok := server.handler.Hub().(*MockHub); ok {
 					mockHub.AssertExpectations(t)
 				}
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
@@ -854,11 +862,12 @@ func TestServer_BroadcastJSON(t *testing.T) {
 
 func TestServer_BroadcastToRoom(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupServer   func() *Server
-		room          string
-		message       []byte
-		expectedError string
+		name            string
+		setupServer     func() *Server
+		room            string
+		message         []byte
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "broadcasts to room successfully",
@@ -872,9 +881,9 @@ func TestServer_BroadcastToRoom(t *testing.T) {
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			room:          "test-room",
-			message:       []byte("test message"),
-			expectedError: "",
+			room:            "test-room",
+			message:         []byte("test message"),
+			isExpectedError: false,
 		},
 		{
 			name: "fails when server not initialized",
@@ -886,9 +895,10 @@ func TestServer_BroadcastToRoom(t *testing.T) {
 				server.handler = nil
 				return server
 			},
-			room:          "test-room",
-			message:       []byte("test message"),
-			expectedError: "server not properly initialized",
+			room:            "test-room",
+			message:         []byte("test message"),
+			isExpectedError: true,
+			expectedError:   errors.New("server not properly initialized"),
 		},
 	}
 
@@ -897,14 +907,14 @@ func TestServer_BroadcastToRoom(t *testing.T) {
 			server := tt.setupServer()
 			err := server.BroadcastToRoom(tt.room, tt.message)
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 				if mockHub, ok := server.handler.Hub().(*MockHub); ok {
 					mockHub.AssertExpectations(t)
 				}
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
@@ -912,11 +922,12 @@ func TestServer_BroadcastToRoom(t *testing.T) {
 
 func TestServer_BroadcastToRoomJSON(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupServer   func() *Server
-		room          string
-		data          interface{}
-		expectedError string
+		name            string
+		setupServer     func() *Server
+		room            string
+		data            interface{}
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "broadcasts JSON to room successfully",
@@ -930,9 +941,9 @@ func TestServer_BroadcastToRoomJSON(t *testing.T) {
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			room:          "test-room",
-			data:          map[string]string{"key": "value"},
-			expectedError: "",
+			room:            "test-room",
+			data:            map[string]string{"key": "value"},
+			isExpectedError: false,
 		},
 		{
 			name: "fails with invalid JSON data",
@@ -945,9 +956,10 @@ func TestServer_BroadcastToRoomJSON(t *testing.T) {
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			room:          "test-room",
-			data:          make(chan int),
-			expectedError: "failed to marshal JSON",
+			room:            "test-room",
+			data:            make(chan int),
+			isExpectedError: true,
+			expectedError:   errors.New("failed to marshal JSON"),
 		},
 	}
 
@@ -956,14 +968,14 @@ func TestServer_BroadcastToRoomJSON(t *testing.T) {
 			server := tt.setupServer()
 			err := server.BroadcastToRoomJSON(tt.room, tt.data)
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 				if mockHub, ok := server.handler.Hub().(*MockHub); ok {
 					mockHub.AssertExpectations(t)
 				}
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
@@ -1135,11 +1147,12 @@ func TestServer_GetClientCount(t *testing.T) {
 
 func TestServer_RoomManagement(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupServer   func() *Server
-		operation     string
-		roomName      string
-		expectedError string
+		name            string
+		setupServer     func() *Server
+		operation       string
+		roomName        string
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "creates room successfully",
@@ -1153,9 +1166,9 @@ func TestServer_RoomManagement(t *testing.T) {
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			operation:     "create",
-			roomName:      "test-room",
-			expectedError: "",
+			operation:       "create",
+			roomName:        "test-room",
+			isExpectedError: false,
 		},
 		{
 			name: "fails to create room with empty name",
@@ -1165,13 +1178,14 @@ func TestServer_RoomManagement(t *testing.T) {
 					t.Fatal(err)
 				}
 				mockHub := NewMockHub()
-				mockHub.On("CreateRoom", "").Return(fmt.Errorf("room name cannot be empty"))
+				mockHub.On("CreateRoom", "").Return(errors.New("room name cannot be empty"))
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			operation:     "create",
-			roomName:      "",
-			expectedError: "room name cannot be empty",
+			operation:       "create",
+			roomName:        "",
+			isExpectedError: true,
+			expectedError:   errors.New("room name cannot be empty"),
 		},
 		{
 			name: "deletes room successfully",
@@ -1187,9 +1201,9 @@ func TestServer_RoomManagement(t *testing.T) {
 				_ = server.CreateRoom("test-room")
 				return server
 			},
-			operation:     "delete",
-			roomName:      "test-room",
-			expectedError: "",
+			operation:       "delete",
+			roomName:        "test-room",
+			isExpectedError: false,
 		},
 		{
 			name: "fails to delete non-existing room",
@@ -1199,13 +1213,14 @@ func TestServer_RoomManagement(t *testing.T) {
 					t.Fatal(err)
 				}
 				mockHub := NewMockHub()
-				mockHub.On("DeleteRoom", "non-existing").Return(fmt.Errorf("room not found: non-existing"))
+				mockHub.On("DeleteRoom", "non-existing").Return(errors.New("room not found: non-existing"))
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			operation:     "delete",
-			roomName:      "non-existing",
-			expectedError: "room not found: non-existing",
+			operation:       "delete",
+			roomName:        "non-existing",
+			isExpectedError: true,
+			expectedError:   errors.New("room not found: non-existing"),
 		},
 	}
 
@@ -1221,11 +1236,11 @@ func TestServer_RoomManagement(t *testing.T) {
 				err = server.DeleteRoom(tt.roomName)
 			}
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 
 			if mockHub, ok := server.handler.Hub().(*MockHub); ok {
@@ -1288,12 +1303,13 @@ func TestServer_GetRooms(t *testing.T) {
 
 func TestServer_ClientRoomOperations(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupServer   func() *Server
-		operation     string
-		clientID      string
-		room          string
-		expectedError string
+		name            string
+		setupServer     func() *Server
+		operation       string
+		clientID        string
+		room            string
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "joins room successfully",
@@ -1310,10 +1326,10 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				server.handler.SetHub(hub)
 				return server
 			},
-			operation:     "join",
-			clientID:      "test-client",
-			room:          "test-room",
-			expectedError: "",
+			operation:       "join",
+			clientID:        "test-client",
+			room:            "test-room",
+			isExpectedError: false,
 		},
 		{
 			name: "fails to join room with non-existing client",
@@ -1326,10 +1342,11 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				server.handler.SetHub(hub)
 				return server
 			},
-			operation:     "join",
-			clientID:      "non-existing",
-			room:          "test-room",
-			expectedError: "client not found: non-existing",
+			operation:       "join",
+			clientID:        "non-existing",
+			room:            "test-room",
+			isExpectedError: true,
+			expectedError:   errors.New("client not found: non-existing"),
 		},
 		{
 			name: "leaves room successfully",
@@ -1346,10 +1363,10 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				server.handler.SetHub(hub)
 				return server
 			},
-			operation:     "leave",
-			clientID:      "test-client",
-			room:          "test-room",
-			expectedError: "",
+			operation:       "leave",
+			clientID:        "test-client",
+			room:            "test-room",
+			isExpectedError: false,
 		},
 		{
 			name: "fails to leave room with non-existing client",
@@ -1362,10 +1379,11 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				server.handler.SetHub(hub)
 				return server
 			},
-			operation:     "leave",
-			clientID:      "non-existing",
-			room:          "test-room",
-			expectedError: "client not found: non-existing",
+			operation:       "leave",
+			clientID:        "non-existing",
+			room:            "test-room",
+			isExpectedError: true,
+			expectedError:   errors.New("client not found: non-existing"),
 		},
 	}
 
@@ -1381,11 +1399,11 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				err = server.LeaveRoom(tt.clientID, tt.room)
 			}
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
@@ -1393,10 +1411,11 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 
 func TestServer_DisconnectClient(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupServer   func() *Server
-		clientID      string
-		expectedError string
+		name            string
+		setupServer     func() *Server
+		clientID        string
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "disconnects client successfully",
@@ -1419,8 +1438,8 @@ func TestServer_DisconnectClient(t *testing.T) {
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			clientID:      "test-client",
-			expectedError: "",
+			clientID:        "test-client",
+			isExpectedError: false,
 		},
 		{
 			name: "fails to disconnect non-existing client",
@@ -1434,8 +1453,9 @@ func TestServer_DisconnectClient(t *testing.T) {
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			clientID:      "non-existing",
-			expectedError: "client not found: non-existing",
+			clientID:        "non-existing",
+			isExpectedError: true,
+			expectedError:   errors.New("client not found: non-existing"),
 		},
 	}
 
@@ -1444,14 +1464,14 @@ func TestServer_DisconnectClient(t *testing.T) {
 			server := tt.setupServer()
 			err := server.DisconnectClient(tt.clientID)
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 				if mockHub, ok := server.handler.Hub().(*MockHub); ok {
 					mockHub.AssertExpectations(t)
 				}
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
@@ -1459,9 +1479,10 @@ func TestServer_DisconnectClient(t *testing.T) {
 
 func TestServer_Stop(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupServer   func() *Server
-		expectedError string
+		name            string
+		setupServer     func() *Server
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "fails when server is not running",
@@ -1473,7 +1494,8 @@ func TestServer_Stop(t *testing.T) {
 				server.isRunning = false
 				return server
 			},
-			expectedError: "server is not running",
+			isExpectedError: true,
+			expectedError:   errors.New("server is not running"),
 		},
 		{
 			name: "fails when server is nil",
@@ -1486,7 +1508,8 @@ func TestServer_Stop(t *testing.T) {
 				server.server = nil
 				return server
 			},
-			expectedError: "server is not running",
+			isExpectedError: true,
+			expectedError:   errors.New("server is not running"),
 		},
 	}
 
@@ -1495,11 +1518,11 @@ func TestServer_Stop(t *testing.T) {
 			server := tt.setupServer()
 			err := server.Stop()
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
@@ -1507,10 +1530,11 @@ func TestServer_Stop(t *testing.T) {
 
 func TestServer_BroadcastData(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupServer   func() *Server
-		data          interface{}
-		expectedError string
+		name            string
+		setupServer     func() *Server
+		data            interface{}
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "broadcasts data with JSON serializer",
@@ -1524,8 +1548,8 @@ func TestServer_BroadcastData(t *testing.T) {
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			data:          map[string]string{"key": "value"},
-			expectedError: "",
+			data:            map[string]string{"key": "value"},
+			isExpectedError: false,
 		},
 		{
 			name: "falls back to JSON when no serializer",
@@ -1540,8 +1564,8 @@ func TestServer_BroadcastData(t *testing.T) {
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			data:          map[string]string{"key": "value"},
-			expectedError: "",
+			data:            map[string]string{"key": "value"},
+			isExpectedError: false,
 		},
 	}
 
@@ -1550,14 +1574,14 @@ func TestServer_BroadcastData(t *testing.T) {
 			server := tt.setupServer()
 			err := server.BroadcastData(tt.data)
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 				if mockHub, ok := server.handler.Hub().(*MockHub); ok {
 					mockHub.AssertExpectations(t)
 				}
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
@@ -1565,11 +1589,12 @@ func TestServer_BroadcastData(t *testing.T) {
 
 func TestServer_BroadcastDataWithEncoding(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupServer   func() *Server
-		data          interface{}
-		encoding      EncodingType
-		expectedError string
+		name            string
+		setupServer     func() *Server
+		data            interface{}
+		encoding        EncodingType
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "broadcasts with JSON encoding",
@@ -1583,9 +1608,9 @@ func TestServer_BroadcastDataWithEncoding(t *testing.T) {
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			data:          map[string]string{"key": "value"},
-			encoding:      JSON,
-			expectedError: "",
+			data:            map[string]string{"key": "value"},
+			encoding:        JSON,
+			isExpectedError: false,
 		},
 		{
 			name: "fails with unsupported encoding",
@@ -1598,9 +1623,10 @@ func TestServer_BroadcastDataWithEncoding(t *testing.T) {
 				server.handler.SetHub(mockHub)
 				return server
 			},
-			data:          "test data",
-			encoding:      EncodingType(999),
-			expectedError: "serializer not found for encoding: 999",
+			data:            "test data",
+			encoding:        EncodingType(999),
+			isExpectedError: true,
+			expectedError:   errors.New("serializer not found for encoding: 999"),
 		},
 	}
 
@@ -1609,14 +1635,14 @@ func TestServer_BroadcastDataWithEncoding(t *testing.T) {
 			server := tt.setupServer()
 			err := server.BroadcastDataWithEncoding(tt.data, tt.encoding)
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 				if mockHub, ok := server.handler.Hub().(*MockHub); ok {
 					mockHub.AssertExpectations(t)
 				}
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}

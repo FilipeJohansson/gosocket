@@ -5,7 +5,7 @@ package gosocket
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 )
 
 // Serializer defines an interface for serializing and deserializing data.
@@ -89,7 +89,7 @@ func (r RawSerializer) Marshal(v interface{}) ([]byte, error) {
 	if data, ok := v.([]byte); ok {
 		return data, nil
 	}
-	return nil, fmt.Errorf("raw serializer expects []byte")
+	return nil, errors.New("raw serializer expects []byte")
 }
 
 func (r RawSerializer) Unmarshal(data []byte, v interface{}) error {
@@ -97,7 +97,7 @@ func (r RawSerializer) Unmarshal(data []byte, v interface{}) error {
 		*ptr = data
 		return nil
 	}
-	return fmt.Errorf("raw serializer expects *[]byte")
+	return errors.New("raw serializer expects *[]byte")
 }
 
 func (r RawSerializer) ContentType() string {

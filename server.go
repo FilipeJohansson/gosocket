@@ -141,7 +141,7 @@ func (s *Server) Start() (err error) {
 	s.mu.Lock()
 	if s.isRunning {
 		s.mu.Unlock()
-		return fmt.Errorf("server is already running")
+		return errors.New("server is already running")
 	}
 
 	if len(s.handler.Serializers()) <= 0 {
@@ -174,7 +174,7 @@ func (s *Server) Start() (err error) {
 	s.mu.Unlock()
 	s.handler.Hub().Stop()
 
-	if err == http.ErrServerClosed {
+	if errors.Is(err, http.ErrServerClosed) {
 		fmt.Println("GoSocket server stopped gracefully")
 		return nil
 	}
@@ -200,7 +200,7 @@ func (s *Server) StartWithContext(ctx context.Context) (err error) {
 	s.mu.Lock()
 	if s.isRunning {
 		s.mu.Unlock()
-		return fmt.Errorf("server is already running")
+		return errors.New("server is already running")
 	}
 
 	if len(s.handler.Serializers()) <= 0 {
@@ -231,7 +231,7 @@ func (s *Server) StartWithContext(ctx context.Context) (err error) {
 			err = s.server.ListenAndServe()
 		}
 
-		if err != http.ErrServerClosed {
+		if !errors.Is(err, http.ErrServerClosed) {
 			errChan <- err
 		}
 	}()
@@ -275,7 +275,7 @@ func (s *Server) Stop() error {
 	s.mu.RLock()
 	if !s.isRunning || s.server == nil {
 		s.mu.RUnlock()
-		return fmt.Errorf("server is not running")
+		return errors.New("server is not running")
 	}
 	s.mu.RUnlock()
 
@@ -337,7 +337,7 @@ func (s *Server) With(options ...UniversalOption) (*Server, error) {
 // will return an error.
 func (s *Server) Broadcast(message []byte) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return fmt.Errorf("server not properly initialized")
+		return errors.New("server not properly initialized")
 	}
 
 	msg := NewRawMessage(TextMessage, message)
@@ -349,7 +349,7 @@ func (s *Server) Broadcast(message []byte) error {
 // initialized, this function will return an error.
 func (s *Server) BroadcastMessage(message *Message) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return fmt.Errorf("server not properly initialized")
+		return errors.New("server not properly initialized")
 	}
 
 	s.handler.Hub().BroadcastMessage(message)
@@ -421,7 +421,7 @@ func (s *Server) BroadcastProtobuf(data interface{}) error {
 // function will return an error.
 func (s *Server) BroadcastToRoom(room string, message []byte) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return fmt.Errorf("server not properly initialized")
+		return errors.New("server not properly initialized")
 	}
 
 	msg := NewRawMessage(TextMessage, message)
@@ -543,7 +543,7 @@ func (s *Server) DisconnectClient(id string) error {
 // Thismethod is safe to call concurrently.
 func (s *Server) CreateRoom(name string) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return fmt.Errorf("server not properly initialized")
+		return errors.New("server not properly initialized")
 	}
 
 	return s.handler.Hub().CreateRoom(name)
@@ -555,7 +555,7 @@ func (s *Server) CreateRoom(name string) error {
 // This method is safe to call concurrently.
 func (s *Server) DeleteRoom(name string) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return fmt.Errorf("server not properly initialized")
+		return errors.New("server not properly initialized")
 	}
 
 	return s.handler.Hub().DeleteRoom(name)

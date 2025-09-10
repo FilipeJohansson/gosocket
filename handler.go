@@ -5,10 +5,11 @@ package gosocket
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -395,7 +396,7 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 
 	if h.events.OnJSONMessage != nil {
 		var jsonData interface{}
-		if err := json.Unmarshal(message.RawData, &jsonData); err == nil {
+		if err := json.Unmarshal(message.RawData, &jsonData); errors.Is(err, nil) {
 			message.Data = jsonData
 			message.Encoding = JSON
 			if err := h.events.OnJSONMessage(client, jsonData, handlerCtx); err != nil {
@@ -411,9 +412,6 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 // ensureHubRunning starts the hub if it is not already running.
 // It is safe to call concurrently.
 func (h *Handler) ensureHubRunning() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	h.hubRunning.Do(func() {
 		go h.hub.Run()
 	})
@@ -431,7 +429,7 @@ func extractHeaders(r *http.Request) map[string]string {
 	relevantHeaders := []string{
 		"Authorization",
 		"X-Forwarded-For",
-		"X-Real-IP",
+		"X-Real-Ip",
 		"Accept",
 		"Accept-Language",
 		"Accept-Encoding",
@@ -451,13 +449,15 @@ func extractHeaders(r *http.Request) map[string]string {
 // address from the header. Otherwise, it returns the IP address from the remote address.
 // The IP address is returned as a string in the format "192.0.2.1".
 func getClientIPFromRequest(r *http.Request) string {
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+	if ip := r.Header.Get("X-Real-Ip"); ip != "" {
 		return ip
 	}
 	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
-		return strings.Split(ip, ",")[0]
+		ip, _, _ := net.SplitHostPort(ip)
+		return ip
 	}
-	return strings.Split(r.RemoteAddr, ":")[0]
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	return ip
 }
 
 // generateRequestID returns a unique request ID as a string. The request ID

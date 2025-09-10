@@ -5,6 +5,7 @@ package gosocket
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -242,7 +243,7 @@ func (h *Hub) BroadcastToRoom(room string, message *Message) {
 // This method is safe to call concurrently.
 func (h *Hub) CreateRoom(name string) error {
 	if name == "" {
-		return fmt.Errorf("room name cannot be empty")
+		return errors.New("room name cannot be empty")
 	}
 
 	h.mu.Lock()
@@ -428,7 +429,7 @@ func (h *Hub) broadcastToClients(message *Message, clients map[*Client]bool) {
 	data := message.RawData
 	if data == nil && message.Data != nil {
 		// TODO: use the right serializer based on Encoding
-		if jsonData, err := json.Marshal(message.Data); err == nil {
+		if jsonData, err := json.Marshal(message.Data); errors.Is(err, nil) {
 			data = jsonData
 		}
 	}
