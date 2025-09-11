@@ -2,7 +2,6 @@ package gosocket
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -78,7 +77,7 @@ func (m *MockHub) BroadcastToRoom(room string, message *Message) {
 func (m *MockHub) CreateRoom(name string) error {
 	m.Called(name)
 	if name == "" {
-		return errors.New("room name cannot be empty")
+		return ErrRoomNameEmpty
 	}
 
 	m.mu.Lock()
@@ -252,7 +251,7 @@ func TestClient_Send(t *testing.T) {
 			},
 			message:         []byte("test message"),
 			isExpectedError: true,
-			expectedError:   errors.New("client connection is nil"),
+			expectedError:   ErrClientConnNil,
 		},
 		{
 			name: "fails when message channel is full",
@@ -266,7 +265,7 @@ func TestClient_Send(t *testing.T) {
 			},
 			message:         []byte("test message"),
 			isExpectedError: true,
-			expectedError:   errors.New("client message channel is full"),
+			expectedError:   ErrClientFull,
 		},
 	}
 
@@ -336,7 +335,7 @@ func TestClient_SendMessage(t *testing.T) {
 				Encoding: Raw,
 			},
 			isExpectedError: true,
-			expectedError:   errors.New("raw encoding expects []byte data"),
+			expectedError:   ErrRawEncoding,
 		},
 		{
 			name: "fails with unsupported encoding",
@@ -345,7 +344,7 @@ func TestClient_SendMessage(t *testing.T) {
 				Encoding: EncodingType(999),
 			},
 			isExpectedError: true,
-			expectedError:   errors.New("unsupported encoding: 999"),
+			expectedError:   newUnsupportedEncodingError(EncodingType(999)),
 		},
 		{
 			name: "fails with no data",
@@ -353,7 +352,7 @@ func TestClient_SendMessage(t *testing.T) {
 				Type: TextMessage,
 			},
 			isExpectedError: true,
-			expectedError:   errors.New("message has no data to send"),
+			expectedError:   ErrNoDataToSend,
 		},
 	}
 
@@ -428,14 +427,14 @@ func TestClient_SendDataWithEncoding(t *testing.T) {
 			data:            "string data",
 			encoding:        Raw,
 			isExpectedError: true,
-			expectedError:   errors.New("raw encoding expects []byte data"),
+			expectedError:   ErrRawEncoding,
 		},
 		{
 			name:            "fails with unsupported encoding",
 			data:            "test data",
 			encoding:        EncodingType(999),
 			isExpectedError: true,
-			expectedError:   errors.New("unsupported encoding: 999"),
+			expectedError:   newUnsupportedEncodingError(EncodingType(999)),
 		},
 	}
 
@@ -470,7 +469,7 @@ func TestClient_SendJSON(t *testing.T) {
 			name:            "fails with invalid JSON data",
 			data:            make(chan int), // channels can't be marshaled to JSON
 			isExpectedError: true,
-			expectedError:   errors.New("failed to marshal JSON"),
+			expectedError:   ErrSerializeData,
 		},
 	}
 
@@ -524,7 +523,7 @@ func TestClient_JoinRoom(t *testing.T) {
 			},
 			room:            "test-room",
 			isExpectedError: true,
-			expectedError:   errors.New("client hub is nil"),
+			expectedError:   ErrHubIsNil,
 		},
 	}
 
@@ -573,7 +572,7 @@ func TestClient_LeaveRoom(t *testing.T) {
 			},
 			room:            "test-room",
 			isExpectedError: true,
-			expectedError:   errors.New("client hub is nil"),
+			expectedError:   ErrHubIsNil,
 		},
 	}
 

@@ -19,7 +19,7 @@ func MockAuthSuccess(r *http.Request) (map[string]interface{}, error) {
 }
 
 func MockAuthFailure(r *http.Request) (map[string]interface{}, error) {
-	return nil, errors.New("authentication failed")
+	return nil, ErrAuthFailure
 }
 
 func MockMiddleware1(next http.Handler) http.Handler {
@@ -81,7 +81,7 @@ func TestHandler_MaxConnections(t *testing.T) {
 			handler, err := NewHandler(WithMaxConnections(tt.input))
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "[WithMaxConnections] max connections must be greater than 0")
+				assert.Contains(t, err.Error(), ErrMaxConnectionsLessThanOne.Error())
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.expected, handler.config.MaxConnections)
@@ -119,7 +119,7 @@ func TestHandler_MessageSize(t *testing.T) {
 			handler, err := NewHandler(WithMessageSize(tt.input))
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "[WithMessageSize] message size must be greater than 0")
+				assert.Contains(t, err.Error(), ErrMessageSizeLessThanOne.Error())
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.expected, handler.config.MessageSize)
@@ -157,7 +157,7 @@ func TestHandler_Timeout(t *testing.T) {
 			handler, err := NewHandler(WithTimeout(tt.read, tt.write))
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "[WithTimeout] read and write timeouts must be greater than 0")
+				assert.Contains(t, err.Error(), ErrTimeoutsLessThanOne.Error())
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.expectedRead, handler.config.ReadTimeout)
@@ -173,7 +173,7 @@ func TestHandler_PingPong(t *testing.T) {
 		pingPeriod         time.Duration
 		pongWait           time.Duration
 		expectError        bool
-		expectErrorMsg     string
+		expectedError      error
 		expectedPingPeriod time.Duration
 		expectedPongWait   time.Duration
 	}{
@@ -185,18 +185,18 @@ func TestHandler_PingPong(t *testing.T) {
 			expectedPongWait:   35 * time.Second,
 		},
 		{
-			name:           "handles ping period greater than pong wait",
-			pingPeriod:     5 * time.Second,
-			pongWait:       1 * time.Second,
-			expectError:    true,
-			expectErrorMsg: "[WithPingPong] pong wait must be greater than ping period",
+			name:          "handles ping period greater than pong wait",
+			pingPeriod:    5 * time.Second,
+			pongWait:      1 * time.Second,
+			expectError:   true,
+			expectedError: ErrPongWaitLessThanPing,
 		},
 		{
-			name:           "handles negative ping pong settings",
-			pingPeriod:     -10 * time.Second,
-			pongWait:       -5 * time.Second,
-			expectError:    true,
-			expectErrorMsg: "[WithPingPong] ping and pong wait periods must be greater than 0",
+			name:          "handles negative ping pong settings",
+			pingPeriod:    -10 * time.Second,
+			pongWait:      -5 * time.Second,
+			expectError:   true,
+			expectedError: ErrPingPongLessThanOne,
 		},
 	}
 
@@ -205,7 +205,7 @@ func TestHandler_PingPong(t *testing.T) {
 			handler, err := NewHandler(WithPingPong(tt.pingPeriod, tt.pongWait))
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectErrorMsg)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.expectedPingPeriod, handler.config.PingPeriod)

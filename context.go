@@ -2,7 +2,6 @@ package gosocket
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"time"
 )
@@ -167,7 +166,7 @@ func (hc *HandlerContext) ProcessingDuration() time.Duration {
 // It returns an error if the hub is not properly set.
 func (hc *HandlerContext) BroadcastToAll(message *Message) error {
 	if hc.hub == nil {
-		return errors.New("hub is nil")
+		return ErrHubIsNil
 	}
 
 	hc.hub.BroadcastMessage(message)
@@ -182,7 +181,7 @@ func (hc *HandlerContext) BroadcastToAll(message *Message) error {
 // It returns an error if the hub is not properly set.
 func (hc *HandlerContext) BroadcastToRoom(room string, message *Message) error {
 	if hc.hub == nil {
-		return errors.New("hub is nil")
+		return ErrHubIsNil
 	}
 
 	message.Room = room

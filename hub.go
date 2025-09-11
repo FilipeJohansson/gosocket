@@ -243,7 +243,7 @@ func (h *Hub) BroadcastToRoom(room string, message *Message) {
 // This method is safe to call concurrently.
 func (h *Hub) CreateRoom(name string) error {
 	if name == "" {
-		return errors.New("room name cannot be empty")
+		return ErrRoomNameEmpty
 	}
 
 	h.mu.Lock()
@@ -387,7 +387,7 @@ func (h *Hub) DeleteRoom(name string) error {
 		return nil
 	}
 
-	return fmt.Errorf("room not found: %s", name)
+	return newRoomNotFoundError(name)
 }
 
 // IsRunning returns a boolean indicating whether the hub is currently running.

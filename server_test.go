@@ -75,7 +75,7 @@ func TestServer_WithPort(t *testing.T) {
 			server, err := NewServer(WithPort(tt.port))
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "[WithPort] invalid port")
+				assert.Contains(t, err.Error(), ErrInvalidPort.Error())
 			} else {
 				assert.NoError(t, err)
 				if tt.expected != nil {
@@ -192,7 +192,7 @@ func TestServer_WithSSL(t *testing.T) {
 			server, err := NewServer(WithSSL(tt.certFile, tt.keyFile))
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "[WithSSL] certFile or keyFile is empty")
+				assert.Contains(t, err.Error(), ErrSSLFilesEmpty.Error())
 			} else {
 				assert.NoError(t, err)
 				if tt.expected != nil {
@@ -237,7 +237,7 @@ func TestServer_WithMaxConnections(t *testing.T) {
 			server, err := NewServer(WithMaxConnections(tt.maxConns))
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "[WithMaxConnections] max connections must be greater than 0")
+				assert.Contains(t, err.Error(), ErrMaxConnectionsLessThanOne.Error())
 			} else {
 				assert.NoError(t, err)
 				if tt.expected != nil {
@@ -282,7 +282,7 @@ func TestServer_WithMessageSize(t *testing.T) {
 			server, err := NewServer(WithMessageSize(tt.size))
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "[WithMessageSize] message size must be greater than 0")
+				assert.Contains(t, err.Error(), ErrMessageSizeLessThanOne.Error())
 			} else {
 				assert.NoError(t, err)
 				if tt.expected != nil {
@@ -332,7 +332,7 @@ func TestServer_WithTimeout(t *testing.T) {
 			server, err := NewServer(WithTimeout(tt.read, tt.write))
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "[WithTimeout] read and write timeouts must be greater than 0")
+				assert.Contains(t, err.Error(), ErrTimeoutsLessThanOne.Error())
 			} else {
 				assert.NoError(t, err)
 				if tt.expected != nil {
@@ -366,7 +366,7 @@ func TestServer_WithPingPong(t *testing.T) {
 			pingPeriod:    0,
 			pongWait:      0,
 			isExpectError: true,
-			expectError:   errors.New("[WithPingPong] ping and pong wait periods must be greater than 0"),
+			expectError:   ErrPingPongLessThanOne,
 			expected:      nil,
 		},
 		{
@@ -374,7 +374,7 @@ func TestServer_WithPingPong(t *testing.T) {
 			pingPeriod:    -10 * time.Second,
 			pongWait:      -20 * time.Second,
 			isExpectError: true,
-			expectError:   errors.New("[WithPingPong] ping and pong wait periods must be greater than 0"),
+			expectError:   ErrPingPongLessThanOne,
 			expected:      nil,
 		},
 		{
@@ -382,7 +382,7 @@ func TestServer_WithPingPong(t *testing.T) {
 			pingPeriod:    10 * time.Second,
 			pongWait:      5 * time.Second,
 			isExpectError: true,
-			expectError:   errors.New("[WithPingPong] pong wait must be greater than ping period"),
+			expectError:   ErrPongWaitLessThanPing,
 			expected:      nil,
 		},
 	}
@@ -709,7 +709,7 @@ func TestServer_Broadcast(t *testing.T) {
 			},
 			message:         []byte("test message"),
 			isExpectedError: true,
-			expectedError:   errors.New("server not properly initialized"),
+			expectedError:   ErrServerNotInitialized,
 		},
 		{
 			name: "fails when hub is nil",
@@ -723,7 +723,7 @@ func TestServer_Broadcast(t *testing.T) {
 			},
 			message:         []byte("test message"),
 			isExpectedError: true,
-			expectedError:   errors.New("server not properly initialized"),
+			expectedError:   ErrServerNotInitialized,
 		},
 	}
 
@@ -780,7 +780,7 @@ func TestServer_BroadcastMessage(t *testing.T) {
 			},
 			message:         NewMessage(TextMessage, "test"),
 			isExpectedError: true,
-			expectedError:   errors.New("server not properly initialized"),
+			expectedError:   ErrServerNotInitialized,
 		},
 	}
 
@@ -838,7 +838,7 @@ func TestServer_BroadcastJSON(t *testing.T) {
 			},
 			data:            make(chan int), // channels can't be marshaled to JSON
 			isExpectedError: true,
-			expectedError:   errors.New("failed to marshal JSON"),
+			expectedError:   ErrSerializeData,
 		},
 	}
 
@@ -898,7 +898,7 @@ func TestServer_BroadcastToRoom(t *testing.T) {
 			room:            "test-room",
 			message:         []byte("test message"),
 			isExpectedError: true,
-			expectedError:   errors.New("server not properly initialized"),
+			expectedError:   ErrServerNotInitialized,
 		},
 	}
 
@@ -959,7 +959,7 @@ func TestServer_BroadcastToRoomJSON(t *testing.T) {
 			room:            "test-room",
 			data:            make(chan int),
 			isExpectedError: true,
-			expectedError:   errors.New("failed to marshal JSON"),
+			expectedError:   ErrSerializeData,
 		},
 	}
 
@@ -1178,14 +1178,14 @@ func TestServer_RoomManagement(t *testing.T) {
 					t.Fatal(err)
 				}
 				mockHub := NewMockHub()
-				mockHub.On("CreateRoom", "").Return(errors.New("room name cannot be empty"))
+				mockHub.On("CreateRoom", "").Return(ErrRoomNameEmpty)
 				server.handler.SetHub(mockHub)
 				return server
 			},
 			operation:       "create",
 			roomName:        "",
 			isExpectedError: true,
-			expectedError:   errors.New("room name cannot be empty"),
+			expectedError:   ErrRoomNameEmpty,
 		},
 		{
 			name: "deletes room successfully",
@@ -1213,14 +1213,14 @@ func TestServer_RoomManagement(t *testing.T) {
 					t.Fatal(err)
 				}
 				mockHub := NewMockHub()
-				mockHub.On("DeleteRoom", "non-existing").Return(errors.New("room not found: non-existing"))
+				mockHub.On("DeleteRoom", "non-existing").Return(newRoomNotFoundError("non-existing"))
 				server.handler.SetHub(mockHub)
 				return server
 			},
 			operation:       "delete",
 			roomName:        "non-existing",
 			isExpectedError: true,
-			expectedError:   errors.New("room not found: non-existing"),
+			expectedError:   newRoomNotFoundError("non-existing"),
 		},
 	}
 
@@ -1346,7 +1346,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 			clientID:        "non-existing",
 			room:            "test-room",
 			isExpectedError: true,
-			expectedError:   errors.New("client not found: non-existing"),
+			expectedError:   newClientNotFoundError("non-existing"),
 		},
 		{
 			name: "leaves room successfully",
@@ -1383,7 +1383,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 			clientID:        "non-existing",
 			room:            "test-room",
 			isExpectedError: true,
-			expectedError:   errors.New("client not found: non-existing"),
+			expectedError:   newClientNotFoundError("non-existing"),
 		},
 	}
 
@@ -1455,7 +1455,7 @@ func TestServer_DisconnectClient(t *testing.T) {
 			},
 			clientID:        "non-existing",
 			isExpectedError: true,
-			expectedError:   errors.New("client not found: non-existing"),
+			expectedError:   newClientNotFoundError("non-existing"),
 		},
 	}
 
@@ -1495,7 +1495,7 @@ func TestServer_Stop(t *testing.T) {
 				return server
 			},
 			isExpectedError: true,
-			expectedError:   errors.New("server is not running"),
+			expectedError:   ErrServerNotRunning,
 		},
 		{
 			name: "fails when server is nil",
@@ -1509,7 +1509,7 @@ func TestServer_Stop(t *testing.T) {
 				return server
 			},
 			isExpectedError: true,
-			expectedError:   errors.New("server is not running"),
+			expectedError:   ErrServerNotRunning,
 		},
 	}
 
@@ -1626,7 +1626,7 @@ func TestServer_BroadcastDataWithEncoding(t *testing.T) {
 			data:            "test data",
 			encoding:        EncodingType(999),
 			isExpectedError: true,
-			expectedError:   errors.New("serializer not found for encoding: 999"),
+			expectedError:   newSerializerNotFoundError(EncodingType(999)),
 		},
 	}
 

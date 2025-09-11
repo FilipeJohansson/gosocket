@@ -1,7 +1,6 @@
 package gosocket
 
 import (
-	"errors"
 	"time"
 )
 
@@ -13,7 +12,7 @@ import (
 func WithMaxConnections(max int) UniversalOption {
 	return func(h HasHandler) error {
 		if max <= 0 {
-			return errors.New("[WithMaxConnections] max connections must be greater than 0")
+			return ErrMaxConnectionsLessThanOne
 		}
 
 		h.Handler().config.MaxConnections = max
@@ -26,7 +25,7 @@ func WithMaxConnections(max int) UniversalOption {
 func WithMessageSize(size int64) UniversalOption {
 	return func(h HasHandler) error {
 		if size <= 0 {
-			return errors.New("[WithMessageSize] message size must be greater than 0")
+			return ErrMessageSizeLessThanOne
 		}
 
 		h.Handler().config.MessageSize = size
@@ -41,7 +40,7 @@ func WithMessageSize(size int64) UniversalOption {
 func WithTimeout(read, write time.Duration) UniversalOption {
 	return func(h HasHandler) error {
 		if read <= 0 || write <= 0 {
-			return errors.New("[WithTimeout] read and write timeouts must be greater than 0")
+			return ErrTimeoutsLessThanOne
 		}
 
 		h.Handler().config.ReadTimeout = read
@@ -59,11 +58,11 @@ func WithTimeout(read, write time.Duration) UniversalOption {
 func WithPingPong(pingPeriod, pongWait time.Duration) UniversalOption {
 	return func(h HasHandler) error {
 		if pingPeriod <= 0 || pongWait <= 0 {
-			return errors.New("[WithPingPong] ping and pong wait periods must be greater than 0")
+			return ErrPingPongLessThanOne
 		}
 
 		if pingPeriod > pongWait {
-			return errors.New("[WithPingPong] pong wait must be greater than ping period")
+			return ErrPongWaitLessThanPing
 		}
 
 		h.Handler().config.PingPeriod = pingPeriod

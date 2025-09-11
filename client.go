@@ -6,7 +6,6 @@ package gosocket
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sync"
 )
 
@@ -100,14 +99,14 @@ func NewClient(id string, conn IWebSocketConn, hub IHub) *Client {
 // This method is safe to call concurrently.
 func (c *Client) Send(message []byte) error {
 	if c.Conn == nil {
-		return errors.New("client connection is nil")
+		return ErrClientConnNil
 	}
 
 	select {
 	case c.MessageChan <- message:
 		return nil
 	default:
-		return errors.New("client message channel is full")
+		return ErrClientFull
 	}
 }
 
@@ -140,13 +139,13 @@ func (c *Client) SendMessage(message *Message) error {
 			if rawData, ok := message.Data.([]byte); ok {
 				return c.Send(rawData)
 			}
-			return errors.New("raw encoding expects []byte data")
+			return ErrRawEncoding
 		default:
-			return fmt.Errorf("unsupported encoding: %d", message.Encoding)
+			return newUnsupportedEncodingError(message.Encoding)
 		}
 	}
 
-	return errors.New("message has no data to send")
+	return ErrNoDataToSend
 }
 
 // SendData sends the given data to the client. It will be sent as JSON if no encoding type is specified.
@@ -174,9 +173,9 @@ func (c *Client) SendDataWithEncoding(data interface{}, encoding EncodingType) e
 		if rawData, ok := data.([]byte); ok {
 			return c.Send(rawData)
 		}
-		return errors.New("raw encoding expects []byte data")
+		return ErrRawEncoding
 	default:
-		return fmt.Errorf("unsupported encoding: %d", encoding)
+		return newUnsupportedEncodingError(encoding)
 	}
 }
 
@@ -191,7 +190,7 @@ func (c *Client) SendDataWithEncoding(data interface{}, encoding EncodingType) e
 func (c *Client) SendJSON(data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("failed to marshal JSON: %w", err)
+		return newSerializeError(err)
 	}
 	return c.Send(jsonData)
 }
@@ -213,7 +212,7 @@ func (c *Client) SendProtobuf(data interface{}) error {
 // This method is safe to call concurrently.
 func (c *Client) JoinRoom(room string) error {
 	if c.Hub == nil {
-		return errors.New("client hub is nil")
+		return ErrHubIsNil
 	}
 	c.Hub.JoinRoom(c, room)
 	return nil
@@ -225,7 +224,7 @@ func (c *Client) JoinRoom(room string) error {
 // This method is safe to call concurrently.
 func (c *Client) LeaveRoom(room string) error {
 	if c.Hub == nil {
-		return errors.New("client hub is nil")
+		return ErrHubIsNil
 	}
 	c.Hub.LeaveRoom(c, room)
 	return nil

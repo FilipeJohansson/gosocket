@@ -185,7 +185,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		var err error
 		userData, err = h.authFunc(r)
 		if err != nil {
-			http.Error(w, "Authentication failed: "+err.Error(), http.StatusUnauthorized)
+			http.Error(w, newAuthFailureError(err).Error(), http.StatusUnauthorized)
 			return
 		}
 	}
@@ -197,7 +197,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		if h.events.OnError != nil {
-			_ = h.events.OnError(nil, fmt.Errorf("websocket upgrade failed: %w", err), handlerCtx)
+			_ = h.events.OnError(nil, newUpgradeFailedError(err), handlerCtx)
 		}
 		return
 	}
@@ -215,7 +215,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	if err := conn.SetReadDeadline(time.Now().Add(h.config.PongWait)); err != nil {
 		if h.events.OnError != nil {
-			_ = h.events.OnError(nil, fmt.Errorf("failed to set read deadline: %w", err), handlerCtx)
+			_ = h.events.OnError(nil, newSetReadDeadlineError(err), handlerCtx)
 		}
 		conn.Close()
 		return
@@ -223,7 +223,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	conn.SetPongHandler(func(string) error {
 		if err := conn.SetReadDeadline(time.Now().Add(h.config.PongWait)); err != nil {
-			return fmt.Errorf("failed to set read deadline in pong handler: %w", err)
+			return newSetReadDeadlineError(err)
 		}
 		if h.events.OnPong != nil {
 			if err := h.events.OnPong(client, handlerCtx); err != nil {
@@ -240,7 +240,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 			h.hub.RemoveClient(client)
 			conn.Close()
 			if h.events.OnError != nil {
-				_ = h.events.OnError(client, fmt.Errorf("connection handler failed: %w", err), handlerCtx)
+				_ = h.events.OnError(client, newEventFailedError("OnConnect", err), handlerCtx)
 			}
 			return
 		}
@@ -273,7 +273,7 @@ func (h *Handler) handleClientWrite(client *Client) {
 			// Set write deadline - if this fails, connection is likely dead
 			if err := conn.SetWriteDeadline(time.Now().Add(h.config.WriteTimeout)); err != nil {
 				if h.events.OnError != nil {
-					_ = h.events.OnError(client, fmt.Errorf("failed to set write deadline: %w", err), handlerCtx)
+					_ = h.events.OnError(client, newSetWriteDeadlineError(err), handlerCtx)
 				}
 				return
 			}
@@ -295,14 +295,14 @@ func (h *Handler) handleClientWrite(client *Client) {
 			// Set write deadline for ping - if this fails, connection is likely dead
 			if err := conn.SetWriteDeadline(time.Now().Add(h.config.WriteTimeout)); err != nil {
 				if h.events.OnError != nil {
-					_ = h.events.OnError(client, fmt.Errorf("failed to set write deadline for ping: %w", err), handlerCtx)
+					_ = h.events.OnError(client, newSetWriteDeadlineError(err), handlerCtx)
 				}
 				return
 			}
 
 			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				if h.events.OnError != nil {
-					_ = h.events.OnError(client, fmt.Errorf("failed to send ping: %w", err), handlerCtx)
+					_ = h.events.OnError(client, newSendMessageError(err), handlerCtx)
 				}
 				return
 			}
@@ -351,7 +351,7 @@ func (h *Handler) handleClientRead(client *Client) {
 		if err := conn.SetReadDeadline(time.Now().Add(h.config.PongWait)); err != nil {
 			if h.events.OnError != nil {
 				handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
-				_ = h.events.OnError(client, fmt.Errorf("failed to set read deadline: %w", err), handlerCtx)
+				_ = h.events.OnError(client, newSetReadDeadlineError(err), handlerCtx)
 			}
 			break
 		}
@@ -381,7 +381,7 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 	if h.events.OnMessage != nil {
 		if err := h.events.OnMessage(client, message, handlerCtx); err != nil {
 			if h.events.OnError != nil {
-				_ = h.events.OnError(client, err, handlerCtx)
+				_ = h.events.OnError(client, newEventFailedError("OnMessage", err), handlerCtx)
 			}
 		}
 	}
@@ -389,7 +389,7 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 	if h.events.OnRawMessage != nil {
 		if err := h.events.OnRawMessage(client, message.RawData, handlerCtx); err != nil {
 			if h.events.OnError != nil {
-				_ = h.events.OnError(client, err, handlerCtx)
+				_ = h.events.OnError(client, newEventFailedError("OnRawMessage", err), handlerCtx)
 			}
 		}
 	}
@@ -401,7 +401,7 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 			message.Encoding = JSON
 			if err := h.events.OnJSONMessage(client, jsonData, handlerCtx); err != nil {
 				if h.events.OnError != nil {
-					_ = h.events.OnError(client, err, handlerCtx)
+					_ = h.events.OnError(client, newEventFailedError("OnJSONMessage", err), handlerCtx)
 				}
 			}
 		}

@@ -134,14 +134,14 @@ func NewServer(options ...UniversalOption) (*Server, error) {
 func (s *Server) Start() (err error) {
 	defer func() {
 		if err != nil {
-			err = fmt.Errorf("[GoSocket] server stopped with error: %w", err)
+			err = newServerStoppedError(err)
 		}
 	}()
 
 	s.mu.Lock()
 	if s.isRunning {
 		s.mu.Unlock()
-		return errors.New("server is already running")
+		return ErrServerAlreadyRunning
 	}
 
 	if len(s.handler.Serializers()) <= 0 {
@@ -193,14 +193,14 @@ func (s *Server) Start() (err error) {
 func (s *Server) StartWithContext(ctx context.Context) (err error) {
 	defer func() {
 		if err != nil {
-			err = fmt.Errorf("[GoSocket] server stopped with error: %w", err)
+			err = newServerStoppedError(err)
 		}
 	}()
 
 	s.mu.Lock()
 	if s.isRunning {
 		s.mu.Unlock()
-		return errors.New("server is already running")
+		return ErrServerAlreadyRunning
 	}
 
 	if len(s.handler.Serializers()) <= 0 {
@@ -251,7 +251,7 @@ func (s *Server) StartWithContext(ctx context.Context) (err error) {
 		}
 
 		if err := s.server.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("server shutdown error: %w", err)
+			return newServerStoppedError(err)
 		}
 
 		fmt.Println("GoSocket server stopped by context")
@@ -275,7 +275,7 @@ func (s *Server) Stop() error {
 	s.mu.RLock()
 	if !s.isRunning || s.server == nil {
 		s.mu.RUnlock()
-		return errors.New("server is not running")
+		return ErrServerNotRunning
 	}
 	s.mu.RUnlock()
 
@@ -298,7 +298,7 @@ func (s *Server) StopGracefully(timeout time.Duration) error {
 	s.mu.RLock()
 	if !s.isRunning || s.server == nil {
 		s.mu.RUnlock()
-		return fmt.Errorf("server is not running")
+		return ErrServerNotRunning
 	}
 	s.mu.RUnlock()
 
@@ -337,7 +337,7 @@ func (s *Server) With(options ...UniversalOption) (*Server, error) {
 // will return an error.
 func (s *Server) Broadcast(message []byte) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return errors.New("server not properly initialized")
+		return ErrServerNotInitialized
 	}
 
 	msg := NewRawMessage(TextMessage, message)
@@ -349,7 +349,7 @@ func (s *Server) Broadcast(message []byte) error {
 // initialized, this function will return an error.
 func (s *Server) BroadcastMessage(message *Message) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return errors.New("server not properly initialized")
+		return ErrServerNotInitialized
 	}
 
 	s.handler.Hub().BroadcastMessage(message)
@@ -370,7 +370,7 @@ func (s *Server) BroadcastData(data interface{}) error {
 
 	rawData, err := serializer.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("failed to serialize data: %w", err)
+		return newSerializeError(err)
 	}
 
 	return s.Broadcast(rawData)
@@ -384,12 +384,12 @@ func (s *Server) BroadcastData(data interface{}) error {
 func (s *Server) BroadcastDataWithEncoding(data interface{}, encoding EncodingType) error {
 	serializer := s.handler.Serializers()[encoding]
 	if serializer == nil {
-		return fmt.Errorf("serializer not found for encoding: %d", encoding)
+		return newSerializerNotFoundError(encoding)
 	}
 
 	rawData, err := serializer.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("failed to serialize data: %w", err)
+		return newSerializeError(err)
 	}
 
 	return s.Broadcast(rawData)
@@ -402,7 +402,7 @@ func (s *Server) BroadcastDataWithEncoding(data interface{}, encoding EncodingTy
 func (s *Server) BroadcastJSON(data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("failed to marshal JSON: %w", err)
+		return newSerializeError(err)
 	}
 
 	return s.Broadcast(jsonData)
@@ -421,7 +421,7 @@ func (s *Server) BroadcastProtobuf(data interface{}) error {
 // function will return an error.
 func (s *Server) BroadcastToRoom(room string, message []byte) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return errors.New("server not properly initialized")
+		return ErrServerNotInitialized
 	}
 
 	msg := NewRawMessage(TextMessage, message)
@@ -444,7 +444,7 @@ func (s *Server) BroadcastToRoomData(room string, data interface{}) error {
 
 	rawData, err := serializer.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("failed to serialize data: %w", err)
+		return newSerializeError(err)
 	}
 
 	return s.BroadcastToRoom(room, rawData)
@@ -457,7 +457,7 @@ func (s *Server) BroadcastToRoomData(room string, data interface{}) error {
 func (s *Server) BroadcastToRoomJSON(room string, data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("failed to marshal JSON: %w", err)
+		return newSerializeError(err)
 	}
 
 	return s.BroadcastToRoom(room, jsonData)
@@ -529,7 +529,7 @@ func (s *Server) GetClientCount() int {
 func (s *Server) DisconnectClient(id string) error {
 	client := s.GetClient(id)
 	if client == nil {
-		return fmt.Errorf("client not found: %s", id)
+		return newClientNotFoundError(id)
 	}
 
 	return client.Disconnect()
@@ -543,7 +543,7 @@ func (s *Server) DisconnectClient(id string) error {
 // Thismethod is safe to call concurrently.
 func (s *Server) CreateRoom(name string) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return errors.New("server not properly initialized")
+		return ErrServerNotInitialized
 	}
 
 	return s.handler.Hub().CreateRoom(name)
@@ -555,7 +555,7 @@ func (s *Server) CreateRoom(name string) error {
 // This method is safe to call concurrently.
 func (s *Server) DeleteRoom(name string) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return errors.New("server not properly initialized")
+		return ErrServerNotInitialized
 	}
 
 	return s.handler.Hub().DeleteRoom(name)
@@ -586,7 +586,7 @@ func (s *Server) GetRooms() []string {
 func (s *Server) JoinRoom(clientID, room string) error {
 	client := s.GetClient(clientID)
 	if client == nil {
-		return fmt.Errorf("client not found: %s", clientID)
+		return newClientNotFoundError(clientID)
 	}
 
 	return client.JoinRoom(room)
@@ -598,7 +598,7 @@ func (s *Server) JoinRoom(clientID, room string) error {
 func (s *Server) LeaveRoom(clientID, room string) error {
 	client := s.GetClient(clientID)
 	if client == nil {
-		return fmt.Errorf("client not found: %s", clientID)
+		return newClientNotFoundError(clientID)
 	}
 
 	return client.LeaveRoom(room)
@@ -631,11 +631,11 @@ func WithPort(port int) UniversalOption {
 	return func(h HasHandler) error {
 		server, ok := h.(*Server)
 		if !ok {
-			return fmt.Errorf("WithPort can only be used with Server, got %T", h)
+			return newWithOnlyServerError("WithPort", h)
 		}
 
 		if port <= 0 || port > 65535 {
-			return fmt.Errorf("[WithPort] invalid port: %d", port)
+			return newInvalidPortError(port)
 		}
 
 		server.config.Port = port
@@ -648,7 +648,7 @@ func WithPath(path string) UniversalOption {
 	return func(h HasHandler) error {
 		server, ok := h.(*Server)
 		if !ok {
-			return fmt.Errorf("WithPath can only be used with Server, got %T", h)
+			return newWithOnlyServerError("WithPath", h)
 		}
 
 		if path == "" {
@@ -673,7 +673,7 @@ func WithCORS(enabled bool) UniversalOption {
 	return func(h HasHandler) error {
 		server, ok := h.(*Server)
 		if !ok {
-			return fmt.Errorf("WithCORS can only be used with Server, got %T", h)
+			return newWithOnlyServerError("WithCORS", h)
 		}
 
 		server.config.EnableCORS = enabled
@@ -689,11 +689,11 @@ func WithSSL(certFile, keyFile string) UniversalOption {
 	return func(h HasHandler) error {
 		server, ok := h.(*Server)
 		if !ok {
-			return fmt.Errorf("WithSSL can only be used with Server, got %T", h)
+			return newWithOnlyServerError("WithSSL", h)
 		}
 
 		if certFile == "" || keyFile == "" {
-			return errors.New("[WithSSL] certFile or keyFile is empty")
+			return ErrSSLFilesEmpty
 		}
 
 		server.config.EnableSSL = true
