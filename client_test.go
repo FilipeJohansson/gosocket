@@ -1,6 +1,7 @@
 package gosocket
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -50,7 +51,7 @@ func NewMockHub() *MockHub {
 	}
 }
 
-func (m *MockHub) Run() {
+func (m *MockHub) Run(ctx context.Context) {
 	m.Called()
 }
 

@@ -148,7 +148,11 @@ func (s *Server) Start() (err error) {
 		s.handler.AddSerializer(JSON, JSONSerializer{}) // JSON as default serializer
 	}
 
-	go s.handler.Hub().Run()
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+
+	defer hubCancel()
+
+	go s.handler.Hub().Run(hubCtx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.config.Path, s.handler.HandleWebSocket)
@@ -157,9 +161,20 @@ func (s *Server) Start() (err error) {
 	httpHandler = s.handler.ApplyMiddlewares(httpHandler)
 
 	s.server = s.buildHttpServer(httpHandler)
-
 	s.isRunning = true
 	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.isRunning = false
+		s.mu.Unlock()
+
+		hubCancel()
+
+		if s.handler != nil && s.handler.Hub() != nil {
+			s.handler.Hub().Stop()
+		}
+	}()
 
 	fmt.Printf("GoSocket server starting on port %d, path %s\n", s.config.Port, s.config.Path)
 	if s.config.EnableSSL {
@@ -169,17 +184,12 @@ func (s *Server) Start() (err error) {
 		err = s.server.ListenAndServe()
 	}
 
-	s.mu.Lock()
-	s.isRunning = false
-	s.mu.Unlock()
-	s.handler.Hub().Stop()
-
 	if errors.Is(err, http.ErrServerClosed) {
 		fmt.Println("GoSocket server stopped gracefully")
 		return nil
 	}
 
-	return
+	return err
 }
 
 // StartWithContext starts the GoSocket server and returns an error. It will start listening on the configured
@@ -207,7 +217,10 @@ func (s *Server) StartWithContext(ctx context.Context) (err error) {
 		s.handler.AddSerializer(JSON, JSONSerializer{}) // JSON as default serializer
 	}
 
-	go s.handler.Hub().Run()
+	hubCtx, hubCancel := context.WithCancel(ctx)
+	defer hubCancel()
+
+	go s.handler.Hub().Run(hubCtx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.config.Path, s.handler.HandleWebSocket)
@@ -216,53 +229,37 @@ func (s *Server) StartWithContext(ctx context.Context) (err error) {
 	handler = s.handler.ApplyMiddlewares(handler)
 
 	s.server = s.buildHttpServer(handler)
-
 	s.isRunning = true
 	s.mu.Unlock()
 
 	errChan := make(chan error, 1)
 
 	go func() {
+		defer close(errChan)
+
 		fmt.Printf("GoSocket server starting on port %d, path %s\n", s.config.Port, s.config.Path)
+		var serverErr error
 		if s.config.EnableSSL {
 			s.server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-			err = s.server.ListenAndServeTLS(s.config.CertFile, s.config.KeyFile)
+			serverErr = s.server.ListenAndServeTLS(s.config.CertFile, s.config.KeyFile)
 		} else {
-			err = s.server.ListenAndServe()
+			serverErr = s.server.ListenAndServe()
 		}
 
-		if !errors.Is(err, http.ErrServerClosed) {
-			errChan <- err
-		}
+		errChan <- serverErr
 	}()
+
+	defer s.performGracefulShutdown(5 * time.Second)
 
 	select {
 	case <-ctx.Done():
 		// context canceled, shutdown graceful
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		s.mu.Lock()
-		s.isRunning = false
-		s.mu.Unlock()
-
-		if s.handler != nil && s.handler.Hub() != nil {
-			s.handler.Hub().Stop()
-		}
-
-		if err := s.server.Shutdown(shutdownCtx); err != nil {
-			return newServerStoppedError(err)
-		}
-
-		fmt.Println("GoSocket server stopped by context")
 		return ctx.Err()
 
 	case err := <-errChan:
-		s.mu.Lock()
-		s.isRunning = false
-		s.mu.Unlock()
-		s.handler.Hub().Stop()
-
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
 		return err
 	}
 }
@@ -621,6 +618,30 @@ func (s *Server) buildHttpServer(httpHandler http.Handler) *http.Server {
 	}
 
 	return server
+}
+
+func (s *Server) performGracefulShutdown(timeout time.Duration) {
+	s.mu.Lock()
+	wasRunning := s.isRunning
+	s.isRunning = false
+	s.mu.Unlock()
+
+	if !wasRunning {
+		return
+	}
+
+	if s.handler != nil && s.handler.Hub() != nil {
+		s.handler.Hub().Stop()
+	}
+
+	if s.server != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		if err := s.server.Shutdown(shutdownCtx); err != nil {
+			_ = s.server.Close()
+		}
+	}
 }
 
 // ===== Functional Options =====

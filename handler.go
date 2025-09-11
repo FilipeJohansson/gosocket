@@ -4,6 +4,7 @@
 package gosocket
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -260,27 +261,33 @@ func (h *Handler) handleClientWrite(client *Client) {
 	ticker := time.NewTicker(h.config.PingPeriod)
 	defer func() {
 		ticker.Stop()
-		_ = client.Conn.(*websocket.Conn).Close()
+		if client.Conn != nil {
+			_ = client.Conn.(*websocket.Conn).Close()
+		}
 	}()
 
 	conn := client.Conn.(*websocket.Conn)
-
 	handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
+
 		case message, ok := <-client.MessageChan:
+			if !ok {
+				_ = conn.WriteControl(websocket.CloseMessage, []byte{}, time.Now().Add(h.config.WriteTimeout))
+				return
+			}
+
 			// Set write deadline - if this fails, connection is likely dead
 			if err := conn.SetWriteDeadline(time.Now().Add(h.config.WriteTimeout)); err != nil {
 				if h.events.OnError != nil {
 					_ = h.events.OnError(client, newSetWriteDeadlineError(err), handlerCtx)
 				}
-				return
-			}
-
-			if !ok {
-				// Channel closed, send close message and return
-				_ = conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
@@ -300,7 +307,7 @@ func (h *Handler) handleClientWrite(client *Client) {
 				return
 			}
 
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(h.config.WriteTimeout)); err != nil {
 				if h.events.OnError != nil {
 					_ = h.events.OnError(client, newSendMessageError(err), handlerCtx)
 				}
@@ -323,14 +330,7 @@ func (h *Handler) handleClientWrite(client *Client) {
 // h.handlers.OnDisconnect when the client is done.
 func (h *Handler) handleClientRead(client *Client) {
 	defer func() {
-		h.hub.RemoveClient(client)
-		_ = client.Conn.(*websocket.Conn).Close()
-
-		if h.events.OnDisconnect != nil {
-			handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
-			// OnDisconnect might return an error, but we're in cleanup so just ignore it
-			_ = h.events.OnDisconnect(client, handlerCtx)
-		}
+		h.cleanupClient(client)
 	}()
 
 	conn := client.Conn.(*websocket.Conn)
@@ -413,8 +413,23 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 // It is safe to call concurrently.
 func (h *Handler) ensureHubRunning() {
 	h.hubRunning.Do(func() {
-		go h.hub.Run()
+		go h.hub.Run(context.Background())
 	})
+}
+
+func (h *Handler) cleanupClient(client *Client) {
+	if h.hub != nil {
+		h.hub.RemoveClient(client)
+	}
+
+	if client.Conn != nil {
+		_ = client.Conn.(*websocket.Conn).Close()
+	}
+
+	if h.events.OnDisconnect != nil {
+		handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
+		_ = h.events.OnDisconnect(client, handlerCtx)
+	}
 }
 
 // extractHeaders extracts relevant headers from the given http request.

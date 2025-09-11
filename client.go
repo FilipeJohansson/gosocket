@@ -52,6 +52,9 @@ type IClient interface {
 	// The client's connection to the server is closed.
 	Disconnect() error
 
+	// IsConnected checks if the client is currently connected to the server.
+	IsConnected() bool
+
 	// SetUserData sets arbitrary user data associated with the client.
 	// The data is stored on the client and can be retrieved later.
 	SetUserData(key string, value interface{})
@@ -98,14 +101,21 @@ func NewClient(id string, conn IWebSocketConn, hub IHub) *Client {
 //
 // This method is safe to call concurrently.
 func (c *Client) Send(message []byte) error {
+	c.mu.RLock()
+
 	if c.Conn == nil {
+		c.mu.RUnlock()
 		return ErrClientConnNil
 	}
+	c.mu.RUnlock()
 
 	select {
 	case c.MessageChan <- message:
 		return nil
 	default:
+		go func() {
+			_ = c.Disconnect()
+		}()
 		return ErrClientFull
 	}
 }
@@ -255,14 +265,27 @@ func (c *Client) GetRooms() []string {
 //
 // This method is safe to call concurrently.
 func (c *Client) Disconnect() error {
+	var err error
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.Hub != nil {
 		c.Hub.RemoveClient(c)
 	}
 
 	if c.Conn != nil {
-		return c.Conn.Close()
+		err = c.Conn.Close()
+		c.Conn = nil
 	}
-	return nil
+
+	return err
+}
+
+func (c *Client) IsConnected() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Conn != nil
 }
 
 // SetUserData sets a value for a key in the client's user data map.
