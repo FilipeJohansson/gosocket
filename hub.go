@@ -6,8 +6,8 @@ package gosocket
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"runtime/debug"
 	"sync"
 )
 
@@ -423,39 +423,70 @@ func (h *Hub) removeClientFromAllRoomsUnsafe(client *Client) {
 //
 // This method is safe to call concurrently, as it takes a read lock on the hub's clients map.
 func (h *Hub) broadcastToClients(message *Message, clients map[*Client]bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("PANIC RECOVERED in broadcastToClients: %v\nStack trace:\n%s\n",
+				r, string(debug.Stack()))
+		}
+	}()
+
 	data := message.RawData
 	if data == nil && message.Data != nil {
-		// TODO: use the right serializer based on Encoding
-		if jsonData, err := json.Marshal(message.Data); errors.Is(err, nil) {
-			data = jsonData
-		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("PANIC RECOVERED in JSON marshal during broadcast: %v\n", r)
+					return
+				}
+			}()
+
+			// TODO: use the right serializer based on Encoding
+			if jsonData, err := json.Marshal(message.Data); err == nil {
+				data = jsonData
+			}
+		}()
+	}
+
+	if data == nil {
+		return
 	}
 
 	var clientsToRemove []*Client
 	for client := range clients {
-		select {
-		case client.MessageChan <- data:
-			// success
-		default:
-			// client channel channel full/closed, remove him
-			fmt.Printf("Client %s channel full/closed, removing\n", client.ID)
-			clientsToRemove = append(clientsToRemove, client)
-		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("PANIC RECOVERED sending to client %s: %v\n",
+						client.ID, r)
+					clientsToRemove = append(clientsToRemove, client)
+				}
+			}()
+
+			select {
+			case client.MessageChan <- data:
+				// success
+			default:
+				fmt.Printf("Client %s channel full/closed, marking for removal\n",
+					client.ID)
+				clientsToRemove = append(clientsToRemove, client)
+			}
+		}()
 	}
 
 	if len(clientsToRemove) > 0 {
-		go func() {
+		safeGoroutine("RemoveProblematicClients", func() {
 			for _, client := range clientsToRemove {
 				h.RemoveClient(client)
 			}
-		}()
+		})
 	}
 }
 
 func (h *Hub) safeCloseClientChannel(client *Client) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("Recovered from panic closing client channel %s: %v\n", client.ID, r)
+			fmt.Printf("PANIC RECOVERED closing channel for client %s: %v\n",
+				client.ID, r)
 		}
 	}()
 
@@ -464,7 +495,14 @@ func (h *Hub) safeCloseClientChannel(client *Client) {
 		case <-client.MessageChan:
 			// already closed
 		default:
-			close(client.MessageChan)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						// ignore
+					}
+				}()
+				close(client.MessageChan)
+			}()
 		}
 	}
 }

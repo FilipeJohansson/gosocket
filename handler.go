@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -165,6 +166,14 @@ func (h *Handler) ApplyMiddlewares(handler http.Handler) http.Handler {
 //
 // This method is safe to call concurrently.
 func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("PANIC RECOVERED in HandleWebSocket: %v\nStack trace:\n%s\n",
+				r, string(debug.Stack()))
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
+	}()
+
 	if h.upgrader.CheckOrigin == nil {
 		h.upgrader.CheckOrigin = func(r *http.Request) bool {
 			if len(h.config.AllowedOrigins) == 0 {
@@ -247,8 +256,13 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	go h.handleClientWriteWithContext(client, handlerCtx)
-	go h.handleClientReadWithContext(client, handlerCtx)
+	safeGoroutine("ClientWrite", func() {
+		h.handleClientWriteWithContext(client, handlerCtx)
+	})
+
+	safeGoroutine("ClientRead", func() {
+		h.handleClientReadWithContext(client, handlerCtx)
+	})
 }
 
 func (h *Handler) handleClientWriteWithContext(client *Client, handlerCtx *Context) {
@@ -263,15 +277,35 @@ func (h *Handler) handleClientWriteWithContext(client *Client, handlerCtx *Conte
 // client. If the client's websocket connection is closed or an error occurs when
 // writing to the client, it calls h.handlers.OnError if it is not nil.
 func (h *Handler) handleClientWrite(client *Client) {
-	ticker := time.NewTicker(h.config.PingPeriod)
 	defer func() {
-		ticker.Stop()
-		if client.Conn != nil {
-			_ = client.Conn.(*websocket.Conn).Close()
+		if r := recover(); r != nil {
+			fmt.Printf("PANIC RECOVERED in handleClientWrite (Client: %s): %v\n",
+				client.ID, r)
 		}
 	}()
 
-	conn := client.Conn.(*websocket.Conn)
+	conn, ok := client.Conn.(*websocket.Conn)
+	if !ok {
+		return
+	}
+
+	ticker := time.NewTicker(h.config.PingPeriod)
+	defer func() {
+		ticker.Stop()
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("PANIC RECOVERED closing connection for client %s: %v\n",
+						client.ID, r)
+				}
+			}()
+
+			if conn != nil {
+				_ = conn.Close()
+			}
+		}()
+	}()
+
 	handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
 
 	ctx := handlerCtx.Context()
@@ -352,10 +386,18 @@ func (h *Handler) handleClientReadWithContext(client *Client, handlerCtx *Contex
 // h.handlers.OnDisconnect when the client is done.
 func (h *Handler) handleClientRead(client *Client) {
 	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("PANIC RECOVERED in handleClientRead (Client: %s): %v\n",
+				client.ID, r)
+		}
 		h.cleanupClient(client)
 	}()
 
-	conn := client.Conn.(*websocket.Conn)
+	conn, ok := client.Conn.(*websocket.Conn)
+	if !ok {
+		return
+	}
+
 	handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
 	ctx := handlerCtx.Context()
 
@@ -476,12 +518,21 @@ func (h *Handler) ensureHubRunning() {
 }
 
 func (h *Handler) cleanupClient(client *Client) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("PANIC RECOVERED in cleanup for client %s: %v\n",
+				client.ID, r)
+		}
+	}()
+
 	if h.hub != nil {
 		h.hub.RemoveClient(client)
 	}
 
 	if client.Conn != nil {
-		_ = client.Conn.(*websocket.Conn).Close()
+		if conn, ok := client.Conn.(*websocket.Conn); ok {
+			_ = conn.Close()
+		}
 	}
 
 	if h.events.OnDisconnect != nil {

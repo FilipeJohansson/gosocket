@@ -5,6 +5,7 @@ package gosocket
 
 import (
 	"fmt"
+	"runtime/debug"
 	"time"
 )
 
@@ -30,4 +31,16 @@ type ConnectionInfo struct {
 
 func GenerateClientID() string {
 	return fmt.Sprintf("client_%d", time.Now().UnixNano())
+}
+
+func safeGoroutine(name string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("PANIC RECOVERED in %s: %v\nStack trace:\n%s\n",
+					name, r, string(debug.Stack()))
+			}
+		}()
+		fn()
+	}()
 }

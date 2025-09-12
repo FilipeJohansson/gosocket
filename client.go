@@ -6,6 +6,7 @@ package gosocket
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 )
 
@@ -101,8 +102,13 @@ func NewClient(id string, conn IWebSocketConn, hub IHub) *Client {
 //
 // This method is safe to call concurrently.
 func (c *Client) Send(message []byte) error {
-	c.mu.RLock()
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("PANIC RECOVERED in Client.Send (ID: %s): %v\n", c.ID, r)
+		}
+	}()
 
+	c.mu.RLock()
 	if c.Conn == nil {
 		c.mu.RUnlock()
 		return ErrClientConnNil
@@ -113,9 +119,9 @@ func (c *Client) Send(message []byte) error {
 	case c.MessageChan <- message:
 		return nil
 	default:
-		go func() {
+		safeGoroutine("Client.Disconnect", func() {
 			_ = c.Disconnect()
-		}()
+		})
 		return ErrClientFull
 	}
 }

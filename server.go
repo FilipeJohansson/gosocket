@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -133,6 +134,12 @@ func NewServer(options ...UniversalOption) (*Server, error) {
 // encounters an error, this function will return an error.
 func (s *Server) Start() (err error) {
 	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("PANIC RECOVERED in Server.Start: %v\nStack trace:\n%s\n",
+				r, string(debug.Stack()))
+			err = fmt.Errorf("server start panic: %v", r)
+		}
+
 		if err != nil {
 			err = newServerStoppedError(err)
 		}
@@ -152,7 +159,9 @@ func (s *Server) Start() (err error) {
 
 	defer hubCancel()
 
-	go s.handler.Hub().Run(hubCtx)
+	safeGoroutine("HubRun", func() {
+		s.handler.Hub().Run(hubCtx)
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.config.Path, s.handler.HandleWebSocket)
