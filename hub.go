@@ -114,33 +114,48 @@ func (h *Hub) Run(ctx context.Context) {
 				return // channel closed, hub stopped
 			}
 
-			h.mu.Lock()
-			h.Clients[client] = true
-			h.mu.Unlock()
-			fmt.Printf("Client registered: %s (total: %d)\n", client.ID, len(h.Clients))
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				h.mu.Lock()
+				h.Clients[client] = true
+				h.mu.Unlock()
+				fmt.Printf("Client registered: %s (total: %d)\n", client.ID, len(h.Clients))
+			}
 
 		case client, ok := <-h.Unregister:
 			if !ok {
 				return // channel closed, hub stopped
 			}
 
-			h.mu.Lock()
-			if _, exists := h.Clients[client]; exists {
-				delete(h.Clients, client)
-				h.safeCloseClientChannel(client)
-				h.removeClientFromAllRoomsUnsafe(client)
-				fmt.Printf("Client unregistered: %s (total: %d)\n", client.ID, len(h.Clients))
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				h.mu.Lock()
+				if _, exists := h.Clients[client]; exists {
+					delete(h.Clients, client)
+					h.safeCloseClientChannel(client)
+					h.removeClientFromAllRoomsUnsafe(client)
+					fmt.Printf("Client unregistered: %s (total: %d)\n", client.ID, len(h.Clients))
+				}
+				h.mu.Unlock()
 			}
-			h.mu.Unlock()
 
 		case message, ok := <-h.Broadcast:
 			if !ok {
 				return // channel closed, hub stopped
 			}
 
-			h.mu.RLock()
-			h.broadcastToClients(message, h.Clients)
-			h.mu.RUnlock()
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				h.mu.RLock()
+				h.broadcastToClients(message, h.Clients)
+				h.mu.RUnlock()
+			}
 		}
 	}
 }

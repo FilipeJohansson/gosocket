@@ -205,7 +205,6 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	clientId := GenerateClientID()
 	client := NewClient(clientId, conn, h.hub)
-
 	client.ConnInfo = handlerCtx.connInfo
 
 	for key, value := range userData {
@@ -240,6 +239,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		if err := h.events.OnConnect(client, handlerCtx); err != nil {
 			h.hub.RemoveClient(client)
 			conn.Close()
+			handlerCtx.Cancel()
 			if h.events.OnError != nil {
 				_ = h.events.OnError(client, newEventFailedError("OnConnect", err), handlerCtx)
 			}
@@ -247,8 +247,13 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	go h.handleClientWrite(client)
-	go h.handleClientRead(client)
+	go h.handleClientWriteWithContext(client, handlerCtx)
+	go h.handleClientReadWithContext(client, handlerCtx)
+}
+
+func (h *Handler) handleClientWriteWithContext(client *Client, handlerCtx *HandlerContext) {
+	defer handlerCtx.Cancel()
+	h.handleClientWrite(client)
 }
 
 // handleClientWrite is a goroutine that writes messages to a client. It reads
@@ -269,18 +274,24 @@ func (h *Handler) handleClientWrite(client *Client) {
 	conn := client.Conn.(*websocket.Conn)
 	handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := handlerCtx.Context()
 
 	for {
 		select {
 		case <-ctx.Done():
+			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"), time.Now().Add(h.config.WriteTimeout))
 			return
 
 		case message, ok := <-client.MessageChan:
 			if !ok {
 				_ = conn.WriteControl(websocket.CloseMessage, []byte{}, time.Now().Add(h.config.WriteTimeout))
 				return
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			default:
 			}
 
 			// Set write deadline - if this fails, connection is likely dead
@@ -299,6 +310,12 @@ func (h *Handler) handleClientWrite(client *Client) {
 			}
 
 		case <-ticker.C:
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
 			// Set write deadline for ping - if this fails, connection is likely dead
 			if err := conn.SetWriteDeadline(time.Now().Add(h.config.WriteTimeout)); err != nil {
 				if h.events.OnError != nil {
@@ -323,6 +340,11 @@ func (h *Handler) handleClientWrite(client *Client) {
 	}
 }
 
+func (h *Handler) handleClientReadWithContext(client *Client, handlerCtx *HandlerContext) {
+	defer handlerCtx.Cancel()
+	h.handleClientRead(client)
+}
+
 // handleClientRead is a goroutine that reads messages from a client. It reads
 // from the client's websocket connection and processes the messages. If the
 // client's websocket connection is closed or an error occurs when reading from
@@ -334,36 +356,72 @@ func (h *Handler) handleClientRead(client *Client) {
 	}()
 
 	conn := client.Conn.(*websocket.Conn)
+	handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
+	ctx := handlerCtx.Context()
+
+	messageChan := make(chan struct {
+		messageType int
+		data        []byte
+		err         error
+	}, 1)
+
+	go func() {
+		defer close(messageChan)
+		for {
+			messageType, data, err := conn.ReadMessage()
+			select {
+			case messageChan <- struct {
+				messageType int
+				data        []byte
+				err         error
+			}{messageType, data, err}:
+			case <-ctx.Done():
+				return
+			}
+
+			if err != nil {
+				return
+			}
+		}
+	}()
 
 	for {
-		messageType, data, err := conn.ReadMessage()
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				if h.events.OnError != nil {
-					handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
-					_ = h.events.OnError(client, err, handlerCtx)
+		select {
+		case <-ctx.Done():
+			conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"), time.Now().Add(h.config.WriteTimeout))
+			return
+
+		case msg, ok := <-messageChan:
+			if !ok {
+				return
+			}
+
+			if msg.err != nil {
+				if websocket.IsUnexpectedCloseError(msg.err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+					if h.events.OnError != nil {
+						_ = h.events.OnError(client, msg.err, handlerCtx)
+					}
 				}
+				return
 			}
-			break
-		}
 
-		// Reset read deadline - if this fails, connection might be in bad state
-		if err := conn.SetReadDeadline(time.Now().Add(h.config.PongWait)); err != nil {
-			if h.events.OnError != nil {
-				handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
-				_ = h.events.OnError(client, newSetReadDeadlineError(err), handlerCtx)
+			// Reset read deadline - if this fails, connection might be in bad state
+			if err := conn.SetReadDeadline(time.Now().Add(h.config.PongWait)); err != nil {
+				if h.events.OnError != nil {
+					_ = h.events.OnError(client, newSetReadDeadlineError(err), handlerCtx)
+				}
+				return
 			}
-			break
-		}
 
-		message := &Message{
-			Type:    MessageType(messageType),
-			RawData: data,
-			From:    client.ID,
-			Created: time.Now(),
-		}
+			message := &Message{
+				Type:    MessageType(msg.messageType),
+				RawData: msg.data,
+				From:    client.ID,
+				Created: time.Now(),
+			}
 
-		h.processMessage(client, message)
+			h.processMessage(client, message)
+		}
 	}
 }
 

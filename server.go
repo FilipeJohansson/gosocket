@@ -249,7 +249,7 @@ func (s *Server) StartWithContext(ctx context.Context) (err error) {
 		errChan <- serverErr
 	}()
 
-	defer s.performGracefulShutdown(5 * time.Second)
+	defer s.performGracefulShutdown(5*time.Second, hubCancel)
 
 	select {
 	case <-ctx.Done():
@@ -620,7 +620,7 @@ func (s *Server) buildHttpServer(httpHandler http.Handler) *http.Server {
 	return server
 }
 
-func (s *Server) performGracefulShutdown(timeout time.Duration) {
+func (s *Server) performGracefulShutdown(timeout time.Duration, hubCancel context.CancelFunc) {
 	s.mu.Lock()
 	wasRunning := s.isRunning
 	s.isRunning = false
@@ -628,6 +628,12 @@ func (s *Server) performGracefulShutdown(timeout time.Duration) {
 
 	if !wasRunning {
 		return
+	}
+
+	hubCancel()
+
+	if s.handler != nil && s.handler.Hub() != nil {
+		s.notifyClientsShutdown()
 	}
 
 	if s.handler != nil && s.handler.Hub() != nil {
@@ -642,6 +648,41 @@ func (s *Server) performGracefulShutdown(timeout time.Duration) {
 			_ = s.server.Close()
 		}
 	}
+}
+
+func (s *Server) notifyClientsShutdown() {
+	if s.handler == nil || s.handler.Hub() == nil {
+		return
+	}
+
+	clients := s.handler.Hub().GetClients()
+	shutdownMessage := map[string]interface{}{
+		"type":      "server_shutdown",
+		"message":   "Server is shutting down",
+		"timestamp": time.Now(),
+	}
+
+	msg := NewMessage(TextMessage, shutdownMessage)
+	msg.Encoding = JSON
+
+	for client := range clients {
+		go func(c *Client) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			select {
+			case c.MessageChan <- func() []byte {
+				data, _ := json.Marshal(shutdownMessage)
+				return data
+			}():
+			case <-ctx.Done():
+				c.Disconnect()
+			}
+		}(client)
+	}
+
+	// give clients time to receive the shutdown message
+	time.Sleep(500 * time.Millisecond)
 }
 
 // ===== Functional Options =====

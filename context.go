@@ -8,6 +8,7 @@ import (
 
 type HandlerContext struct {
 	ctx       context.Context
+	cancel    context.CancelFunc
 	startTime time.Time
 	connInfo  *ConnectionInfo
 
@@ -20,10 +21,12 @@ type HandlerContext struct {
 // connection info as the original context. The context is created with a
 // new background context, and the start time is set to the current time.
 func NewHandlerContext(handler *Handler) *HandlerContext {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &HandlerContext{
 		handler:   handler,
 		hub:       handler.hub,
-		ctx:       context.Background(),
+		ctx:       ctx,
+		cancel:    cancel,
 		startTime: time.Now(),
 		connInfo: &ConnectionInfo{
 			RequestID: generateRequestID(),
@@ -35,10 +38,12 @@ func NewHandlerContext(handler *Handler) *HandlerContext {
 // It retrieves the client IP, user agent, origin, and headers from the request
 // and uses them to create a new context.
 func NewHandlerContextFromRequest(handler *Handler, r *http.Request) *HandlerContext {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &HandlerContext{
 		handler:   handler,
 		hub:       handler.hub,
-		ctx:       context.Background(),
+		ctx:       ctx,
+		cancel:    cancel,
 		startTime: time.Now(),
 		connInfo: &ConnectionInfo{
 			ClientIP:  getClientIPFromRequest(r),
@@ -56,10 +61,12 @@ func NewHandlerContextFromRequest(handler *Handler, r *http.Request) *HandlerCon
 // original context. The context is created with a new background context, and the start time is
 // set to the current time.
 func NewHandlerContextWithConnection(handler *Handler, connInfo *ConnectionInfo) *HandlerContext {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &HandlerContext{
 		handler:   handler,
 		hub:       handler.hub,
-		ctx:       context.Background(),
+		ctx:       ctx,
+		cancel:    cancel,
 		startTime: time.Now(),
 		connInfo:  connInfo,
 	}
@@ -71,6 +78,17 @@ func NewHandlerContextWithConnection(handler *Handler, connInfo *ConnectionInfo)
 // context.
 func (hc *HandlerContext) Context() context.Context {
 	return hc.ctx
+}
+
+// Cancel cancels the context associated with the handler context. If the
+// context is cancelled, any blocked calls to the context's Done method will
+// return immediately. If the context is already cancelled, this method does
+// nothing. The context is cancelled regardless of whether the handler context
+// is associated with a connection or not.
+func (hc *HandlerContext) Cancel() {
+	if hc.cancel != nil {
+		hc.cancel()
+	}
 }
 
 // WithContext returns a new context with the given context. The context is the parent context
