@@ -17,15 +17,15 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type OnConnectFunc func(c *Client, ctx *HandlerContext) error
-type OnDisconnectFunc func(c *Client, ctx *HandlerContext) error
-type OnMessageFunc func(c *Client, m *Message, ctx *HandlerContext) error            // generic handler
-type OnRawMessageFunc func(c *Client, m []byte, ctx *HandlerContext) error           // raw data handler
-type OnJSONMessageFunc func(c *Client, m interface{}, ctx *HandlerContext) error     // JSON specific handler
-type OnProtobufMessageFunc func(c *Client, m interface{}, ctx *HandlerContext) error // Protobuf specific handler
-type OnErrorFunc func(c *Client, err error, ctx *HandlerContext) error
-type OnPingFunc func(c *Client, ctx *HandlerContext) error
-type OnPongFunc func(c *Client, ctx *HandlerContext) error
+type OnConnectFunc func(c *Client, ctx *Context) error
+type OnDisconnectFunc func(c *Client, ctx *Context) error
+type OnMessageFunc func(c *Client, m *Message, ctx *Context) error            // generic handler
+type OnRawMessageFunc func(c *Client, m []byte, ctx *Context) error           // raw data handler
+type OnJSONMessageFunc func(c *Client, m interface{}, ctx *Context) error     // JSON specific handler
+type OnProtobufMessageFunc func(c *Client, m interface{}, ctx *Context) error // Protobuf specific handler
+type OnErrorFunc func(c *Client, err error, ctx *Context) error
+type OnPingFunc func(c *Client, ctx *Context) error
+type OnPongFunc func(c *Client, ctx *Context) error
 
 type Events struct {
 	OnConnect         OnConnectFunc
@@ -251,7 +251,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	go h.handleClientReadWithContext(client, handlerCtx)
 }
 
-func (h *Handler) handleClientWriteWithContext(client *Client, handlerCtx *HandlerContext) {
+func (h *Handler) handleClientWriteWithContext(client *Client, handlerCtx *Context) {
 	defer handlerCtx.Cancel()
 	h.handleClientWrite(client)
 }
@@ -340,7 +340,7 @@ func (h *Handler) handleClientWrite(client *Client) {
 	}
 }
 
-func (h *Handler) handleClientReadWithContext(client *Client, handlerCtx *HandlerContext) {
+func (h *Handler) handleClientReadWithContext(client *Client, handlerCtx *Context) {
 	defer handlerCtx.Cancel()
 	h.handleClientRead(client)
 }

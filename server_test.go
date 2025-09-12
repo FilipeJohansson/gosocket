@@ -599,63 +599,63 @@ func TestServer_EventHandlers(t *testing.T) {
 	}{
 		{
 			name:  "OnConnect handler",
-			setup: OnConnect(func(c *Client, ctx *HandlerContext) error { return nil }),
+			setup: OnConnect(func(c *Client, ctx *Context) error { return nil }),
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.Handlers().OnConnect)
 			},
 		},
 		{
 			name:  "OnDisconnect handler",
-			setup: OnDisconnect(func(c *Client, ctx *HandlerContext) error { return nil }),
+			setup: OnDisconnect(func(c *Client, ctx *Context) error { return nil }),
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.Handlers().OnDisconnect)
 			},
 		},
 		{
 			name:  "OnMessage handler",
-			setup: OnMessage(func(c *Client, m *Message, ctx *HandlerContext) error { return nil }),
+			setup: OnMessage(func(c *Client, m *Message, ctx *Context) error { return nil }),
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.Handlers().OnMessage)
 			},
 		},
 		{
 			name:  "OnRawMessage handler",
-			setup: OnRawMessage(func(c *Client, data []byte, ctx *HandlerContext) error { return nil }),
+			setup: OnRawMessage(func(c *Client, data []byte, ctx *Context) error { return nil }),
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.Handlers().OnRawMessage)
 			},
 		},
 		{
 			name:  "OnJSONMessage handler",
-			setup: OnJSONMessage(func(c *Client, data interface{}, ctx *HandlerContext) error { return nil }),
+			setup: OnJSONMessage(func(c *Client, data interface{}, ctx *Context) error { return nil }),
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.Handlers().OnJSONMessage)
 			},
 		},
 		{
 			name:  "OnProtobufMessage handler",
-			setup: OnProtobufMessage(func(c *Client, data interface{}, ctx *HandlerContext) error { return nil }),
+			setup: OnProtobufMessage(func(c *Client, data interface{}, ctx *Context) error { return nil }),
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.Handlers().OnProtobufMessage)
 			},
 		},
 		{
 			name:  "OnError handler",
-			setup: OnError(func(c *Client, err error, ctx *HandlerContext) error { return nil }),
+			setup: OnError(func(c *Client, err error, ctx *Context) error { return nil }),
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.Handlers().OnError)
 			},
 		},
 		{
 			name:  "OnPing handler",
-			setup: OnPing(func(c *Client, ctx *HandlerContext) error { return nil }),
+			setup: OnPing(func(c *Client, ctx *Context) error { return nil }),
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.Handlers().OnPing)
 			},
 		},
 		{
 			name:  "OnPong handler",
-			setup: OnPong(func(c *Client, ctx *HandlerContext) error { return nil }),
+			setup: OnPong(func(c *Client, ctx *Context) error { return nil }),
 			validate: func(s *Server) {
 				assert.NotNil(t, s.handler.Handlers().OnPong)
 			},
