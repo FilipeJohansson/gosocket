@@ -278,14 +278,11 @@ func (s *Server) StartWithContext(ctx context.Context) (err error) {
 // encounters an error while stopping, this function will return an error. This function will also return an error
 // if the server's underlying net.Listener cannot be closed.
 func (s *Server) Stop() error {
-	s.mu.RLock()
+	s.mu.Lock()
 	if !s.isRunning || s.server == nil {
-		s.mu.RUnlock()
+		s.mu.Unlock()
 		return ErrServerNotRunning
 	}
-	s.mu.RUnlock()
-
-	s.mu.Lock()
 	s.isRunning = false
 	s.mu.Unlock()
 
@@ -301,25 +298,23 @@ func (s *Server) Stop() error {
 // encounters an error while stopping, this function will return an error. This function will also return an error if the server's
 // underlying net.Listener cannot be closed.
 func (s *Server) StopGracefully(timeout time.Duration) error {
-	s.mu.RLock()
-	if !s.isRunning || s.server == nil {
-		s.mu.RUnlock()
-		return ErrServerNotRunning
-	}
-	s.mu.RUnlock()
-
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	s.mu.Lock()
+	if !s.isRunning || s.server == nil {
+		s.mu.Unlock()
+		return ErrServerNotRunning
+	}
 	s.isRunning = false
+	srv := s.server
 	s.mu.Unlock()
 
 	if s.handler != nil && s.handler.Hub() != nil {
 		s.handler.Hub().Stop()
 	}
 
-	return s.server.Shutdown(ctx)
+	return srv.Shutdown(ctx)
 }
 
 // With applies the given options to the server. The options are applied in the

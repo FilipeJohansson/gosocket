@@ -59,7 +59,7 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func onConnect(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
+func onConnect(client *gosocket.Client, ctx *gosocket.Context) error {
 	return client.SendJSON(Message{
 		Type: "notification",
 		Data: Notification{
@@ -70,7 +70,7 @@ func onConnect(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 	})
 }
 
-func onMessage(client *gosocket.Client, data interface{}, ctx *gosocket.HandlerContext) error {
+func onMessage(client *gosocket.Client, data interface{}, ctx *gosocket.Context) error {
 	jsonBytes, _ := json.Marshal(data)
 	var msg Message
 	json.Unmarshal(jsonBytes, &msg)

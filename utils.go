@@ -6,8 +6,11 @@ package gosocket
 import (
 	"fmt"
 	"runtime/debug"
+	"sync/atomic"
 	"time"
 )
+
+var clientCounter atomic.Uint64
 
 type UniversalOption func(HasHandler) error
 
@@ -30,7 +33,7 @@ type ConnectionInfo struct {
 }
 
 func GenerateClientID() string {
-	return fmt.Sprintf("client_%d", time.Now().UnixNano())
+	return fmt.Sprintf("client_%d_%d", time.Now().UnixNano(), clientCounter.Add(1))
 }
 
 func safeGoroutine(name string, fn func()) {

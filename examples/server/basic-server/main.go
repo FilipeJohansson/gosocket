@@ -11,7 +11,7 @@ import (
 
 func main() {
 	ws, err := gosocket.NewServer(
-		gosocket.WithPort(-1),
+		gosocket.WithPort(8080),
 		gosocket.WithPath("/ws"),
 		gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
 			fmt.Printf("Client connected: %s\n", client.ID)

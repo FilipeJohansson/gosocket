@@ -502,8 +502,8 @@ func TestHandler_EnsureHubRunning(t *testing.T) {
 	handler.hub = mockHub
 
 	// call ensureHubRunning twice
-	handler.ensureHubRunning()
-	handler.ensureHubRunning()
+	handler.ensureHubRunning(t.Context())
+	handler.ensureHubRunning(t.Context())
 
 	// wait a moment for goroutine to start
 	time.Sleep(10 * time.Millisecond)

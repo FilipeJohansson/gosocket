@@ -108,12 +108,12 @@ func (c *Client) Send(message []byte) error {
 		}
 	}()
 
-	c.mu.RLock()
+	c.mu.Lock()
 	if c.Conn == nil {
-		c.mu.RUnlock()
+		c.mu.Unlock()
 		return ErrClientConnNil
 	}
-	c.mu.RUnlock()
+	c.mu.Unlock()
 
 	select {
 	case c.MessageChan <- message:
@@ -289,8 +289,8 @@ func (c *Client) Disconnect() error {
 }
 
 func (c *Client) IsConnected() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.Conn != nil
 }
 

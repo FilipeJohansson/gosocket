@@ -128,7 +128,7 @@ func (h *Handler) Handler() *Handler {
 // all configured middlewares to the request. Finally, it calls
 // the configured WebSocket handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.ensureHubRunning()
+	h.ensureHubRunning(context.Background())
 
 	if len(h.middlewares) > 0 {
 		wsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -511,9 +511,9 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 
 // ensureHubRunning starts the hub if it is not already running.
 // It is safe to call concurrently.
-func (h *Handler) ensureHubRunning() {
+func (h *Handler) ensureHubRunning(ctx context.Context) {
 	h.hubRunning.Do(func() {
-		go h.hub.Run(context.Background())
+		go h.hub.Run(ctx)
 	})
 }
 
