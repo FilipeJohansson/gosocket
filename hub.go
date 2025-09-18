@@ -504,9 +504,7 @@ func (h *Hub) safeCloseClientChannel(client *Client) {
 		default:
 			func() {
 				defer func() {
-					if r := recover(); r != nil {
-						// ignore
-					}
+					_ = recover()
 				}()
 				close(client.MessageChan)
 			}()

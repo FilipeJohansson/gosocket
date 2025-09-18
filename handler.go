@@ -431,7 +431,7 @@ func (h *Handler) handleClientRead(client *Client) {
 	for {
 		select {
 		case <-ctx.Done():
-			conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"), time.Now().Add(h.config.WriteTimeout))
+			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"), time.Now().Add(h.config.WriteTimeout))
 			return
 
 		case msg, ok := <-messageChan:

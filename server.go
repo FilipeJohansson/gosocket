@@ -680,7 +680,7 @@ func (s *Server) notifyClientsShutdown() {
 				return data
 			}():
 			case <-ctx.Done():
-				c.Disconnect()
+				_ = c.Disconnect()
 			}
 		}(client)
 	}
