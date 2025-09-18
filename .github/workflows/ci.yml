@@ -1,0 +1,80 @@
+name: Check Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test & Quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+      
+      - name: Cache Go Modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install Tools
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          go install golang.org/x/tools/cmd/goimports@latest
+        
+      - name: Tidy and verify modules
+        run: |
+          go mod tidy
+          go mod verify
+        
+      # - name: Check formatting
+      #   run: |
+      #     # Check if Go files are properly formatted
+      #     UNFORMATTED=$(gofmt -l .)
+      #     if [ -n "$UNFORMATTED" ]; then
+      #       echo "Go files are not properly formatted:"
+      #       echo "$UNFORMATTED"
+      #       exit 1
+      #     fi
+          
+      #     # Check goimports
+      #     goimports -l . | grep -E '\.go
+      
+      - name: Run linter
+        run: golangci-lint run
+
+      - name: Run security scan
+        uses: securego/gosec@master
+        with:
+          args: ./...
+
+      - name: Run tests with race detection
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Generate coverage report
+        run: go tool cover -func=coverage.out
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.out
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+      - name: Build project
+        run: go build -v ./...
