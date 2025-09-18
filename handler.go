@@ -4,9 +4,10 @@
 package gosocket
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"net/http"
 	"strings"
 	"sync"
@@ -216,7 +217,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		if h.events.OnError != nil {
 			_ = h.events.OnError(nil, fmt.Errorf("failed to set read deadline: %w", err), handlerCtx)
 		}
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 
@@ -237,7 +238,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if h.events.OnConnect != nil {
 		if err := h.events.OnConnect(client, handlerCtx); err != nil {
 			h.hub.RemoveClient(client)
-			conn.Close()
+			_ = conn.Close()
 			if h.events.OnError != nil {
 				_ = h.events.OnError(client, fmt.Errorf("connection handler failed: %w", err), handlerCtx)
 			}
@@ -466,5 +467,9 @@ func getClientIPFromRequest(r *http.Request) string {
 // passed to the OnRequest handler if it is not nil. The request ID can be
 // used to identify requests in logs, metrics, and other monitoring tools.
 func generateRequestID() string {
-	return fmt.Sprintf("req_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
+	randN, err := rand.Int(rand.Reader, big.NewInt(10000))
+	if err != nil {
+		return fmt.Sprintf("req_%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("req_%d_%d", time.Now().UnixNano(), randN)
 }
