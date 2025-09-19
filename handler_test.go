@@ -242,27 +242,27 @@ func TestHandler_Serializers(t *testing.T) {
 	}{
 		{
 			name:       "WithSerializer",
-			setup:      WithSerializer(JSON, CreateSerializer(JSON, SerializationConfig{})),
+			setup:      WithSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig())),
 			serializer: JSON,
-			wantType:   JSONSerializer{},
+			wantType:   &JSONSerializer{},
 		},
 		{
 			name:       "WithJSONSerializer",
 			setup:      WithJSONSerializer(),
 			serializer: JSON,
-			wantType:   JSONSerializer{},
+			wantType:   &JSONSerializer{},
 		},
 		{
 			name:       "WithProtobufSerializer",
 			setup:      WithProtobufSerializer(),
 			serializer: Protobuf,
-			wantType:   ProtobufSerializer{},
+			wantType:   &ProtobufSerializer{},
 		},
 		{
 			name:       "WithRawSerializer",
 			setup:      WithRawSerializer(),
 			serializer: Raw,
-			wantType:   RawSerializer{},
+			wantType:   &RawSerializer{},
 		},
 	}
 
@@ -669,7 +669,7 @@ func TestHandler_DefaultConfig(t *testing.T) {
 	config := DefaultHandlerConfig()
 
 	assert.Equal(t, 1000, config.MaxConnections)
-	assert.Equal(t, int64(512), config.MessageSize)
+	assert.Equal(t, int64(512*1024), config.MessageSize)
 	assert.Equal(t, 60*time.Second, config.ReadTimeout)
 	assert.Equal(t, 10*time.Second, config.WriteTimeout)
 	assert.Equal(t, 54*time.Second, config.PingPeriod)

@@ -60,14 +60,18 @@ func DefaultHandlerConfig() *HandlerConfig {
 		PingPeriod:      54 * time.Second,
 		PongWait:        60 * time.Second,
 		DefaultEncoding: JSON,
-		Serialization: SerializationConfig{
-			MaxDepth:        10,
-			MaxKeys:         100,
-			MaxElements:     1000,
-			DisallowedTypes: []string{"func", "chan", "unsafe.Pointer"},
-			EnableStrict:    true,
-			MaxStringLength: 1024 * 1024,
-			MaxBinarySize:   10 * 1024 * 1024,
-		},
+		Serialization:   DefaultSerializerConfig(),
+	}
+}
+
+func DefaultSerializerConfig() SerializationConfig {
+	return SerializationConfig{
+		MaxDepth:        10,
+		MaxKeys:         100,
+		MaxElements:     1000,
+		DisallowedTypes: []string{"func", "chan", "unsafe.Pointer"},
+		EnableStrict:    true,
+		MaxStringLength: 1024 * 1024,
+		MaxBinarySize:   10 * 1024 * 1024,
 	}
 }

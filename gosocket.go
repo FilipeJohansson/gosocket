@@ -116,7 +116,7 @@ func WithSerializer(encoding EncodingType, serializer Serializer) UniversalOptio
 // incoming messages for the JSON encoding type. The default JSON serializer
 // will be used if no other serializer is specified.
 func WithJSONSerializer() UniversalOption {
-	return WithSerializer(JSON, CreateSerializer(JSON, SerializationConfig{}))
+	return WithSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig()))
 }
 
 // WithProtobufSerializer sets the default Protobuf serializer for a handler. The
@@ -124,7 +124,7 @@ func WithJSONSerializer() UniversalOption {
 // incoming messages for the Protobuf encoding type. The default Protobuf
 // serializer will be used if no other serializer is specified.
 func WithProtobufSerializer() UniversalOption {
-	return WithSerializer(Protobuf, CreateSerializer(Protobuf, SerializationConfig{}))
+	return WithSerializer(Protobuf, CreateSerializer(Protobuf, DefaultSerializerConfig()))
 }
 
 // WithRawSerializer sets the default Raw serializer for a handler. The
@@ -132,7 +132,7 @@ func WithProtobufSerializer() UniversalOption {
 // incoming messages for the Raw encoding type. The default Raw serializer
 // will be used if no other serializer is specified.
 func WithRawSerializer() UniversalOption {
-	return WithSerializer(Raw, CreateSerializer(Raw, SerializationConfig{}))
+	return WithSerializer(Raw, CreateSerializer(Raw, DefaultSerializerConfig()))
 }
 
 // WithMiddleware adds a middleware to the handler. The middleware will be

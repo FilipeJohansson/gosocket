@@ -152,7 +152,7 @@ func (s *Server) Start() (err error) {
 	}
 
 	if len(s.handler.Serializers()) <= 0 {
-		s.handler.AddSerializer(JSON, CreateSerializer(JSON, SerializationConfig{})) // JSON as default serializer
+		s.handler.AddSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig())) // JSON as default serializer
 	}
 
 	hubCtx, hubCancel := context.WithCancel(context.Background())
@@ -223,7 +223,7 @@ func (s *Server) StartWithContext(ctx context.Context) (err error) {
 	}
 
 	if len(s.handler.Serializers()) <= 0 {
-		s.handler.AddSerializer(JSON, CreateSerializer(JSON, SerializationConfig{})) // JSON as default serializer
+		s.handler.AddSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig())) // JSON as default serializer
 	}
 
 	hubCtx, hubCancel := context.WithCancel(ctx)
