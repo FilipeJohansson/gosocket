@@ -15,6 +15,10 @@ var (
 	ErrSSLFilesEmpty             = errors.New("certFile or keyFile is empty")
 	ErrWithOnlyServer            = errors.New("can only be set on server")
 	ErrInvalidPort               = errors.New("invalid port")
+	ErrDepthLessThanOne          = errors.New("depth must be greater than 0")
+	ErrMaxKeyLengthLessThanOne   = errors.New("max key length must be greater than 0")
+	ErrMaxElementsLessThanOne    = errors.New("max elements must be greater than 0")
+	ErrMaxBinarySizeLessThanOne  = errors.New("max binary size must be greater than 0")
 
 	// Client errors
 	ErrClientConnNil  = errors.New("client connection is nil")
@@ -42,10 +46,20 @@ var (
 	ErrUpgradeFailed = errors.New("websocket upgrade failed")
 
 	// Serializer errors
-	ErrRawSerializer      = errors.New("raw serializer expects []byte")
-	ErrRawSerializerPtr   = errors.New("raw serializer expects *[]byte")
-	ErrSerializeData      = errors.New("failed to serialize data")
-	ErrSerializerNotFound = errors.New("serializer not found for encoding")
+	ErrRawSerializer           = errors.New("raw serializer expects []byte")
+	ErrRawSerializerPtr        = errors.New("raw serializer expects *[]byte")
+	ErrSerializeData           = errors.New("failed to serialize data")
+	ErrSerializerNotFound      = errors.New("serializer not found for encoding")
+	ErrMaxDepthExceeded        = errors.New("max depth exceeded")
+	ErrMaxKeyLengthExceeded    = errors.New("max key length exceeded")
+	ErrMaxElementsExceeded     = errors.New("max elements exceeded")
+	ErrMaxStringLengthExceeded = errors.New("max string length exceeded")
+	ErrTypeNotAllowed          = errors.New("type not allowed")
+	ErroInvalidValue           = errors.New("invalid value")
+	ErrEmptyData               = errors.New("empty data")
+	ErrDataTooLong             = errors.New("data too long")
+	ErrInvalidJSON             = errors.New("invalid JSON")
+	ErrInvalidStruct           = errors.New("invalid struct")
 
 	// Encoding errors
 	ErrRawEncoding         = errors.New("raw encoding expects []byte data")
@@ -106,4 +120,40 @@ func newInvalidPortError(port int) error {
 
 func newAuthFailureError(err error) error {
 	return fmt.Errorf("%w: %w", ErrAuthFailure, err)
+}
+
+func newMaxDepthExceededError(val int) error {
+	return fmt.Errorf("%w: %d", ErrMaxDepthExceeded, val)
+}
+
+func newMaxKeyLengthExceededError(val int) error {
+	return fmt.Errorf("%w: %d", ErrMaxKeyLengthExceeded, val)
+}
+
+func newMaxElementsExceededError(val int) error {
+	return fmt.Errorf("%w: %d", ErrMaxElementsExceeded, val)
+}
+
+func newMaxStringLengthExceededError(val int) error {
+	return fmt.Errorf("%w: %d", ErrMaxStringLengthExceeded, val)
+}
+
+func newTypeNotAllowedError(t string) error {
+	return fmt.Errorf("%w: %s", ErrTypeNotAllowed, t)
+}
+
+func newInvalidValueError(val string) error {
+	return fmt.Errorf("%w: %s", ErroInvalidValue, val)
+}
+
+func newInvalidJsonError(err error) error {
+	return fmt.Errorf("%w: %w", ErrInvalidJSON, err)
+}
+
+func newInvalidStructError(err error) error {
+	return fmt.Errorf("%w: %w", ErrInvalidStruct, err)
+}
+
+func newDataTooLongError(val int) error {
+	return fmt.Errorf("%w: %d", ErrDataTooLong, val)
 }

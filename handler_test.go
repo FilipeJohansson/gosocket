@@ -242,7 +242,7 @@ func TestHandler_Serializers(t *testing.T) {
 	}{
 		{
 			name:       "WithSerializer",
-			setup:      WithSerializer(JSON, JSONSerializer{}),
+			setup:      WithSerializer(JSON, CreateSerializer(JSON, SerializationConfig{})),
 			serializer: JSON,
 			wantType:   JSONSerializer{},
 		},

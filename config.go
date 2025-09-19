@@ -8,6 +8,16 @@ import (
 	"time"
 )
 
+type SerializationConfig struct {
+	MaxDepth        int
+	MaxKeys         int
+	MaxElements     int
+	MaxStringLength int
+	MaxBinarySize   int64
+	DisallowedTypes []string
+	EnableStrict    bool
+}
+
 type HandlerConfig struct {
 	MaxConnections  int
 	MessageSize     int64
@@ -17,6 +27,7 @@ type HandlerConfig struct {
 	PongWait        time.Duration
 	AllowedOrigins  []string
 	DefaultEncoding EncodingType // default message encoding
+	Serialization   SerializationConfig
 }
 
 type ServerConfig struct {
@@ -43,11 +54,20 @@ func DefaultServerConfig() *ServerConfig {
 func DefaultHandlerConfig() *HandlerConfig {
 	return &HandlerConfig{
 		MaxConnections:  1000,
-		MessageSize:     512,
+		MessageSize:     512 * 1024,
 		ReadTimeout:     60 * time.Second,
 		WriteTimeout:    10 * time.Second,
 		PingPeriod:      54 * time.Second,
 		PongWait:        60 * time.Second,
 		DefaultEncoding: JSON,
+		Serialization: SerializationConfig{
+			MaxDepth:        10,
+			MaxKeys:         100,
+			MaxElements:     1000,
+			DisallowedTypes: []string{"func", "chan", "unsafe.Pointer"},
+			EnableStrict:    true,
+			MaxStringLength: 1024 * 1024,
+			MaxBinarySize:   10 * 1024 * 1024,
+		},
 	}
 }

@@ -486,7 +486,7 @@ func TestServer_WithSerializer(t *testing.T) {
 		{
 			name:       "sets JSON serializer",
 			encoding:   JSON,
-			serializer: JSONSerializer{},
+			serializer: CreateSerializer(JSON, SerializationConfig{}),
 			expected: func(s *Server) {
 				ser, exists := s.handler.Serializers()[JSON]
 				assert.True(t, exists)
@@ -496,7 +496,7 @@ func TestServer_WithSerializer(t *testing.T) {
 		{
 			name:       "sets Protobuf serializer",
 			encoding:   Protobuf,
-			serializer: ProtobufSerializer{},
+			serializer: CreateSerializer(Protobuf, SerializationConfig{}),
 			expected: func(s *Server) {
 				ser, exists := s.handler.Serializers()[Protobuf]
 				assert.True(t, exists)
@@ -506,7 +506,7 @@ func TestServer_WithSerializer(t *testing.T) {
 		{
 			name:       "sets Raw serializer",
 			encoding:   Raw,
-			serializer: RawSerializer{},
+			serializer: CreateSerializer(Raw, SerializationConfig{}),
 			expected: func(s *Server) {
 				ser, exists := s.handler.Serializers()[Raw]
 				assert.True(t, exists)
