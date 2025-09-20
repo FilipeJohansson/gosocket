@@ -1,14 +1,17 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025 Filipe Johansson
+
 package gosocket
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"time"
 )
 
-type HandlerContext struct {
+type Context struct {
 	ctx       context.Context
+	cancel    context.CancelFunc
 	startTime time.Time
 	connInfo  *ConnectionInfo
 
@@ -20,11 +23,13 @@ type HandlerContext struct {
 // It creates a new context with the given handler and hub, and the same
 // connection info as the original context. The context is created with a
 // new background context, and the start time is set to the current time.
-func NewHandlerContext(handler *Handler) *HandlerContext {
-	return &HandlerContext{
+func NewHandlerContext(handler *Handler) *Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Context{
 		handler:   handler,
 		hub:       handler.hub,
-		ctx:       context.Background(),
+		ctx:       ctx,
+		cancel:    cancel,
 		startTime: time.Now(),
 		connInfo: &ConnectionInfo{
 			RequestID: generateRequestID(),
@@ -35,17 +40,19 @@ func NewHandlerContext(handler *Handler) *HandlerContext {
 // NewHandlerContextFromRequest creates a new context from the given http request.
 // It retrieves the client IP, user agent, origin, and headers from the request
 // and uses them to create a new context.
-func NewHandlerContextFromRequest(handler *Handler, r *http.Request) *HandlerContext {
-	return &HandlerContext{
+func NewHandlerContextFromRequest(handler *Handler, r *http.Request) *Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Context{
 		handler:   handler,
 		hub:       handler.hub,
-		ctx:       context.Background(),
+		ctx:       ctx,
+		cancel:    cancel,
 		startTime: time.Now(),
 		connInfo: &ConnectionInfo{
 			ClientIP:  getClientIPFromRequest(r),
 			UserAgent: r.Header.Get("User-Agent"),
 			Origin:    r.Header.Get("Origin"),
-			Headers:   extractHeaders(r),
+			Headers:   extractHeaders(r, handler.config.RelevantHeaders...),
 			RequestID: generateRequestID(),
 		},
 	}
@@ -56,11 +63,13 @@ func NewHandlerContextFromRequest(handler *Handler, r *http.Request) *HandlerCon
 // It returns a new context with the given connection info, and the same handler and hub as the
 // original context. The context is created with a new background context, and the start time is
 // set to the current time.
-func NewHandlerContextWithConnection(handler *Handler, connInfo *ConnectionInfo) *HandlerContext {
-	return &HandlerContext{
+func NewHandlerContextWithConnection(handler *Handler, connInfo *ConnectionInfo) *Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Context{
 		handler:   handler,
 		hub:       handler.hub,
-		ctx:       context.Background(),
+		ctx:       ctx,
+		cancel:    cancel,
 		startTime: time.Now(),
 		connInfo:  connInfo,
 	}
@@ -70,15 +79,26 @@ func NewHandlerContextWithConnection(handler *Handler, connInfo *ConnectionInfo)
 // is the parent context that was passed when creating the handler context. The
 // context can be used to cancel the context, or to retrieve values from the
 // context.
-func (hc *HandlerContext) Context() context.Context {
+func (hc *Context) Context() context.Context {
 	return hc.ctx
+}
+
+// Cancel cancels the context associated with the handler context. If the
+// context is cancelled, any blocked calls to the context's Done method will
+// return immediately. If the context is already cancelled, this method does
+// nothing. The context is cancelled regardless of whether the handler context
+// is associated with a connection or not.
+func (hc *Context) Cancel() {
+	if hc.cancel != nil {
+		hc.cancel()
+	}
 }
 
 // WithContext returns a new context with the given context. The context is the parent context
 // that was passed when creating the handler context. The context can be used to cancel the
 // context, or to retrieve values from the context. The new context is a shallow copy of the
 // original context, with the context replaced.
-func (hc *HandlerContext) WithContext(ctx context.Context) *HandlerContext {
+func (hc *Context) WithContext(ctx context.Context) *Context {
 	newHC := *hc
 	newHC.ctx = ctx
 	return &newHC
@@ -89,7 +109,7 @@ func (hc *HandlerContext) WithContext(ctx context.Context) *HandlerContext {
 // given value. The cancel function can be used to cancel the context, or to retrieve values
 // from the context. The context can be used to cancel the context, or to retrieve values
 // from the context.
-func (hc *HandlerContext) WithTimeout(timeout time.Duration) (*HandlerContext, context.CancelFunc) {
+func (hc *Context) WithTimeout(timeout time.Duration) (*Context, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(hc.ctx, timeout)
 	return hc.WithContext(ctx), cancel
 }
@@ -97,7 +117,7 @@ func (hc *HandlerContext) WithTimeout(timeout time.Duration) (*HandlerContext, c
 // RequestID returns the request ID associated with the context. The request ID is a unique
 // identifier for the connection, and can be used to identify the connection in logs and metrics.
 // If the context is not associated with a connection, an empty string is returned.
-func (hc *HandlerContext) RequestID() string {
+func (hc *Context) RequestID() string {
 	if hc.connInfo != nil {
 		return hc.connInfo.RequestID
 	}
@@ -106,7 +126,7 @@ func (hc *HandlerContext) RequestID() string {
 
 // ClientIP returns the client IP address associated with the context.
 // If the context is not associated with a connection, "unknown" is returned.
-func (hc *HandlerContext) ClientIP() string {
+func (hc *Context) ClientIP() string {
 	if hc.connInfo != nil {
 		return hc.connInfo.ClientIP
 	}
@@ -115,7 +135,7 @@ func (hc *HandlerContext) ClientIP() string {
 
 // UserAgent returns the user agent associated with the context.
 // If the context is not associated with a connection, an empty string is returned.
-func (hc *HandlerContext) UserAgent() string {
+func (hc *Context) UserAgent() string {
 	if hc.connInfo != nil {
 		return hc.connInfo.UserAgent
 	}
@@ -126,7 +146,7 @@ func (hc *HandlerContext) UserAgent() string {
 // The origin is the value of the Origin header of the request that
 // established the connection. If the context is not associated with a
 // connection, an empty string is returned.
-func (hc *HandlerContext) Origin() string {
+func (hc *Context) Origin() string {
 	if hc.connInfo != nil {
 		return hc.connInfo.Origin
 	}
@@ -135,7 +155,7 @@ func (hc *HandlerContext) Origin() string {
 
 // Header returns the value of the given header key associated with the context.
 // If the context is not associated with a connection, an empty string is returned.
-func (hc *HandlerContext) Header(key string) string {
+func (hc *Context) Header(key string) string {
 	if hc.connInfo != nil && hc.connInfo.Headers != nil {
 		return hc.connInfo.Headers[key]
 	}
@@ -144,7 +164,7 @@ func (hc *HandlerContext) Header(key string) string {
 
 // Headers returns the HTTP headers associated with the context.
 // If the context is not associated with a connection, nil is returned.
-func (hc *HandlerContext) Headers() map[string]string {
+func (hc *Context) Headers() map[string]string {
 	if hc.connInfo != nil {
 		return hc.connInfo.Headers
 	}
@@ -155,7 +175,7 @@ func (hc *HandlerContext) Headers() map[string]string {
 // The returned duration is the time elapsed between the context creation
 // time and the current time. If the context is not associated with a
 // connection, 0 is returned.
-func (hc *HandlerContext) ProcessingDuration() time.Duration {
+func (hc *Context) ProcessingDuration() time.Duration {
 	return time.Since(hc.startTime)
 }
 
@@ -165,9 +185,9 @@ func (hc *HandlerContext) ProcessingDuration() time.Duration {
 // If the context is not associated with a hub, an error is returned.
 //
 // It returns an error if the hub is not properly set.
-func (hc *HandlerContext) BroadcastToAll(message *Message) error {
+func (hc *Context) BroadcastToAll(message *Message) error {
 	if hc.hub == nil {
-		return fmt.Errorf("hub is nil")
+		return ErrHubIsNil
 	}
 
 	hc.hub.BroadcastMessage(message)
@@ -180,9 +200,9 @@ func (hc *HandlerContext) BroadcastToAll(message *Message) error {
 // If the context is not associated with a hub, an error is returned.
 //
 // It returns an error if the hub is not properly set.
-func (hc *HandlerContext) BroadcastToRoom(room string, message *Message) error {
+func (hc *Context) BroadcastToRoom(room string, message *Message) error {
 	if hc.hub == nil {
-		return fmt.Errorf("hub is nil")
+		return ErrHubIsNil
 	}
 
 	message.Room = room
@@ -196,7 +216,7 @@ func (hc *HandlerContext) BroadcastToRoom(room string, message *Message) error {
 // calls BroadcastToAll to send the message.
 //
 // It returns an error if the hub is not properly set.
-func (hc *HandlerContext) BroadcastJSONToAll(data interface{}) error {
+func (hc *Context) BroadcastJSONToAll(data interface{}) error {
 	message := NewMessage(TextMessage, data)
 	message.Encoding = JSON
 	return hc.BroadcastToAll(message)
@@ -208,7 +228,7 @@ func (hc *HandlerContext) BroadcastJSONToAll(data interface{}) error {
 // calls BroadcastToRoom to send the message.
 //
 // It returns an error if the hub is not properly set.
-func (hc *HandlerContext) BroadcastJSONToRoom(room string, data interface{}) error {
+func (hc *Context) BroadcastJSONToRoom(room string, data interface{}) error {
 	message := NewMessage(TextMessage, data)
 	message.Encoding = JSON
 	return hc.BroadcastToRoom(room, message)
@@ -218,7 +238,7 @@ func (hc *HandlerContext) BroadcastJSONToRoom(room string, data interface{}) err
 // context is not associated with a hub, an empty slice is returned.
 //
 // This method is safe to call concurrently.
-func (hc *HandlerContext) GetClientsInRoom(room string) []*Client {
+func (hc *Context) GetClientsInRoom(room string) []*Client {
 	if hc.hub == nil {
 		return []*Client{}
 	}
@@ -230,7 +250,7 @@ func (hc *HandlerContext) GetClientsInRoom(room string) []*Client {
 // If the context is not associated with a hub, an empty slice is returned.
 //
 // This method is safe to call concurrently.
-func (hc *HandlerContext) GetAllClients() []*Client {
+func (hc *Context) GetAllClients() []*Client {
 	if hc.hub == nil {
 		return []*Client{}
 	}
@@ -247,7 +267,7 @@ func (hc *HandlerContext) GetAllClients() []*Client {
 // If the context is not associated with a hub, an empty map is returned.
 //
 // This method is safe to call concurrently.
-func (hc *HandlerContext) GetStats() map[string]interface{} {
+func (hc *Context) GetStats() map[string]interface{} {
 	if hc.hub == nil {
 		return map[string]interface{}{}
 	}
@@ -256,7 +276,7 @@ func (hc *HandlerContext) GetStats() map[string]interface{} {
 
 // Handler returns the handler associated with the context. This can be used to
 // access the underlying handler's configuration and functionality.
-func (hc *HandlerContext) Handler() *Handler {
+func (hc *Context) Handler() *Handler {
 	return hc.handler
 }
 
@@ -266,6 +286,6 @@ func (hc *HandlerContext) Handler() *Handler {
 // nil is returned.
 //
 // This method is safe to call concurrently.
-func (hc *HandlerContext) Hub() IHub {
+func (hc *Context) Hub() IHub {
 	return hc.hub
 }

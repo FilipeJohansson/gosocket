@@ -4,29 +4,34 @@
 package gosocket
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"net/http"
-	"strings"
+	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-type OnConnectFunc func(c *Client, ctx *HandlerContext) error
-type OnDisconnectFunc func(c *Client, ctx *HandlerContext) error
-type OnMessageFunc func(c *Client, m *Message, ctx *HandlerContext) error            // generic handler
-type OnRawMessageFunc func(c *Client, m []byte, ctx *HandlerContext) error           // raw data handler
-type OnJSONMessageFunc func(c *Client, m interface{}, ctx *HandlerContext) error     // JSON specific handler
-type OnProtobufMessageFunc func(c *Client, m interface{}, ctx *HandlerContext) error // Protobuf specific handler
-type OnErrorFunc func(c *Client, err error, ctx *HandlerContext) error
-type OnPingFunc func(c *Client, ctx *HandlerContext) error
-type OnPongFunc func(c *Client, ctx *HandlerContext) error
+type OnBeforeConnectFunc func(r *http.Request, ctx *Context) error
+type OnConnectFunc func(c *Client, ctx *Context) error
+type OnDisconnectFunc func(c *Client, ctx *Context) error
+type OnMessageFunc func(c *Client, m *Message, ctx *Context) error            // generic handler
+type OnRawMessageFunc func(c *Client, m []byte, ctx *Context) error           // raw data handler
+type OnJSONMessageFunc func(c *Client, m interface{}, ctx *Context) error     // JSON specific handler
+type OnProtobufMessageFunc func(c *Client, m interface{}, ctx *Context) error // Protobuf specific handler
+type OnErrorFunc func(c *Client, err error, ctx *Context) error
+type OnPingFunc func(c *Client, ctx *Context) error
+type OnPongFunc func(c *Client, ctx *Context) error
 
 type Events struct {
+	OnBeforeConnect   OnBeforeConnectFunc
 	OnConnect         OnConnectFunc
 	OnDisconnect      OnDisconnectFunc
 	OnMessage         OnMessageFunc
@@ -44,10 +49,15 @@ type Handler struct {
 	events      *Events
 	serializers map[EncodingType]Serializer
 	authFunc    AuthFunc
+
 	upgrader    websocket.Upgrader
 	hubRunning  sync.Once
 	middlewares []Middleware
 	mu          sync.RWMutex
+
+	connectionPool *ConnectionPool
+	logger         *LoggerConfig
+	rateLimiter    *RateLimiterManager
 }
 
 // NewHandler returns a new instance of Handler with default configuration.
@@ -55,8 +65,11 @@ type Handler struct {
 // read and write buffers to 1024 bytes. The default encoding is JSON, but you can
 // change it by calling the WithEncoding method.
 func NewHandler(options ...UniversalOption) (*Handler, error) {
+	rl := NewRateLimiterManager(DefaultRateLimiterConfig())
+	l := DefaultLoggerConfig()
+
 	h := &Handler{
-		hub:         NewHub(),
+		hub:         NewHub(l),
 		config:      DefaultHandlerConfig(),
 		events:      &Events{},
 		serializers: make(map[EncodingType]Serializer),
@@ -65,6 +78,9 @@ func NewHandler(options ...UniversalOption) (*Handler, error) {
 			WriteBufferSize: 1024,
 		},
 		mu: sync.RWMutex{},
+
+		logger:      l,
+		rateLimiter: rl,
 	}
 
 	for _, o := range options {
@@ -72,6 +88,8 @@ func NewHandler(options ...UniversalOption) (*Handler, error) {
 			return nil, err
 		}
 	}
+
+	h.initConnectionPool()
 
 	return h, nil
 }
@@ -126,7 +144,7 @@ func (h *Handler) Handler() *Handler {
 // all configured middlewares to the request. Finally, it calls
 // the configured WebSocket handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.ensureHubRunning()
+	h.ensureHubRunning(context.Background())
 
 	if len(h.middlewares) > 0 {
 		wsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -164,6 +182,31 @@ func (h *Handler) ApplyMiddlewares(handler http.Handler) http.Handler {
 //
 // This method is safe to call concurrently.
 func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	if h.config.ConnectionTimeout > 0 {
+		ctx, cancel := context.WithTimeout(r.Context(), h.config.ConnectionTimeout)
+		defer cancel()
+		r = r.WithContext(ctx)
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			h.log(LogTypeError, LogLevelError, "PANIC RECOVERED in HandleWebSocket: %v\nStack trace:\n%s\n", r, string(debug.Stack()))
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
+	}()
+
+	clientIP := getClientIPFromRequest(r)
+
+	if h.connectionPool != nil {
+		if err := h.connectionPool.AcquireConnection(clientIP); err != nil {
+			h.log(LogTypeConnection, LogLevelWarn, "Connection rejected for %s: %v", clientIP, err)
+			http.Error(w, "Too many connections", http.StatusTooManyRequests)
+			return
+		}
+
+		defer h.connectionPool.ReleaseConnection(clientIP)
+	}
+
 	if h.upgrader.CheckOrigin == nil {
 		h.upgrader.CheckOrigin = func(r *http.Request) bool {
 			if len(h.config.AllowedOrigins) == 0 {
@@ -182,29 +225,42 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	var userData map[string]interface{}
 	if h.authFunc != nil {
+		h.log(LogTypeAuth, LogLevelDebug, "Authenticating user: %s", r.RemoteAddr)
 		var err error
 		userData, err = h.authFunc(r)
 		if err != nil {
-			http.Error(w, "Authentication failed: "+err.Error(), http.StatusUnauthorized)
+			h.log(LogTypeAuth, LogLevelError, "Authentication failed: %v", err)
+			http.Error(w, newAuthFailureError(err).Error(), http.StatusUnauthorized)
 			return
 		}
 	}
 
 	handlerCtx := NewHandlerContextFromRequest(h, r)
-	handlerCtx.connInfo.ClientIP = getClientIPFromRequest(r)
+	handlerCtx.connInfo.ClientIP = clientIP
 	handlerCtx.connInfo.RequestID = generateRequestID()
+
+	if !h.rateLimiter.AllowIP(r.RemoteAddr) {
+		http.Error(w, ErrTooManyRequests.Error(), http.StatusTooManyRequests)
+		return
+	}
+
+	if h.events.OnBeforeConnect != nil {
+		if err := h.events.OnBeforeConnect(r, handlerCtx); err != nil {
+			http.Error(w, fmt.Sprintf("connection rejected: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
 
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		if h.events.OnError != nil {
-			_ = h.events.OnError(nil, fmt.Errorf("websocket upgrade failed: %w", err), handlerCtx)
+			_ = h.events.OnError(nil, newUpgradeFailedError(err), handlerCtx)
 		}
 		return
 	}
 
 	clientId := GenerateClientID()
-	client := NewClient(clientId, conn, h.hub)
-
+	client := NewClient(clientId, conn, h.hub, h.config.MessageChanBufSize)
 	client.ConnInfo = handlerCtx.connInfo
 
 	for key, value := range userData {
@@ -215,7 +271,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	if err := conn.SetReadDeadline(time.Now().Add(h.config.PongWait)); err != nil {
 		if h.events.OnError != nil {
-			_ = h.events.OnError(nil, fmt.Errorf("failed to set read deadline: %w", err), handlerCtx)
+			_ = h.events.OnError(nil, newSetReadDeadlineError(err), handlerCtx)
 		}
 		_ = conn.Close()
 		return
@@ -223,7 +279,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	conn.SetPongHandler(func(string) error {
 		if err := conn.SetReadDeadline(time.Now().Add(h.config.PongWait)); err != nil {
-			return fmt.Errorf("failed to set read deadline in pong handler: %w", err)
+			return newSetReadDeadlineError(err)
 		}
 		if h.events.OnPong != nil {
 			if err := h.events.OnPong(client, handlerCtx); err != nil {
@@ -237,17 +293,37 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	if h.events.OnConnect != nil {
 		if err := h.events.OnConnect(client, handlerCtx); err != nil {
+			h.log(LogTypeError, LogLevelError, "OnConnect handler error: %v", err)
 			h.hub.RemoveClient(client)
 			_ = conn.Close()
+			handlerCtx.Cancel()
 			if h.events.OnError != nil {
-				_ = h.events.OnError(client, fmt.Errorf("connection handler failed: %w", err), handlerCtx)
+				_ = h.events.OnError(client, newEventFailedError("OnConnect", err), handlerCtx)
 			}
 			return
 		}
+		h.log(LogTypeConnection, LogLevelInfo, "%s connected", client.ID)
 	}
 
-	go h.handleClientWrite(client)
-	go h.handleClientRead(client)
+	safeGoroutine("ClientWrite", func() {
+		h.handleClientWriteWithContext(client, handlerCtx)
+	})
+
+	safeGoroutine("ClientRead", func() {
+		h.handleClientReadWithContext(client, handlerCtx)
+	})
+}
+
+func (h *Handler) GetConnectionStats() (int, map[string]int) {
+	if h.connectionPool == nil {
+		return 0, nil
+	}
+	return h.connectionPool.GetStats()
+}
+
+func (h *Handler) handleClientWriteWithContext(client *Client, handlerCtx *Context) {
+	defer handlerCtx.Cancel()
+	h.handleClientWrite(client)
 }
 
 // handleClientWrite is a goroutine that writes messages to a client. It reads
@@ -257,55 +333,100 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 // client. If the client's websocket connection is closed or an error occurs when
 // writing to the client, it calls h.handlers.OnError if it is not nil.
 func (h *Handler) handleClientWrite(client *Client) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.log(LogTypeError, LogLevelError, "PANIC RECOVERED in handleClientWrite (Client: %s): %v", client.ID, r)
+		}
+	}()
+
+	conn, ok := client.Conn.(*websocket.Conn)
+	if !ok {
+		h.log(LogTypeError, LogLevelError, "Client %s connection is not a websocket connection", client.ID)
+		return
+	}
+
 	ticker := time.NewTicker(h.config.PingPeriod)
 	defer func() {
 		ticker.Stop()
-		_ = client.Conn.(*websocket.Conn).Close()
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					h.log(LogTypeError, LogLevelError, "PANIC RECOVERED closing connection for client %s: %v", client.ID, r)
+				}
+			}()
+
+			if conn != nil {
+				_ = conn.Close()
+			}
+		}()
 	}()
 
-	conn := client.Conn.(*websocket.Conn)
-
 	handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
+	ctx := handlerCtx.Context()
 
 	for {
 		select {
+		case <-ctx.Done():
+			h.log(LogTypeMessage, LogLevelDebug, "%s write cancelled", client.ID)
+			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"), time.Now().Add(h.config.WriteTimeout))
+			return
+
 		case message, ok := <-client.MessageChan:
+			if !ok {
+				h.log(LogTypeMessage, LogLevelDebug, "%s write channel closed", client.ID)
+				_ = conn.WriteControl(websocket.CloseMessage, []byte{}, time.Now().Add(h.config.WriteTimeout))
+				return
+			}
+
+			select {
+			case <-ctx.Done():
+				h.log(LogTypeMessage, LogLevelDebug, "%s write cancelled", client.ID)
+				return
+			default:
+			}
+
 			// Set write deadline - if this fails, connection is likely dead
 			if err := conn.SetWriteDeadline(time.Now().Add(h.config.WriteTimeout)); err != nil {
+				h.log(LogTypeError, LogLevelDebug, "%s write deadline error: %v", client.ID, err)
 				if h.events.OnError != nil {
-					_ = h.events.OnError(client, fmt.Errorf("failed to set write deadline: %w", err), handlerCtx)
+					_ = h.events.OnError(client, newSetWriteDeadlineError(err), handlerCtx)
 				}
 				return
 			}
 
-			if !ok {
-				// Channel closed, send close message and return
-				_ = conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-
 			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				h.log(LogTypeMessage, LogLevelError, "%s write error: %v", client.ID, err)
 				if h.events.OnError != nil {
 					_ = h.events.OnError(client, err, handlerCtx)
 				}
 				return
 			}
+			h.log(LogTypeMessage, LogLevelDebug, "%s wrote: %s", client.ID, message)
 
 		case <-ticker.C:
+			select {
+			case <-ctx.Done():
+				h.log(LogTypeMessage, LogLevelDebug, "%s write cancelled for ping", client.ID)
+				return
+			default:
+			}
+
 			// Set write deadline for ping - if this fails, connection is likely dead
 			if err := conn.SetWriteDeadline(time.Now().Add(h.config.WriteTimeout)); err != nil {
 				if h.events.OnError != nil {
-					_ = h.events.OnError(client, fmt.Errorf("failed to set write deadline for ping: %w", err), handlerCtx)
+					_ = h.events.OnError(client, newSetWriteDeadlineError(err), handlerCtx)
 				}
 				return
 			}
 
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(h.config.WriteTimeout)); err != nil {
+				h.log(LogTypeMessage, LogLevelError, "%s ping error: %v", client.ID, err)
 				if h.events.OnError != nil {
-					_ = h.events.OnError(client, fmt.Errorf("failed to send ping: %w", err), handlerCtx)
+					_ = h.events.OnError(client, newSendMessageError(err), handlerCtx)
 				}
 				return
 			}
+			h.log(LogTypeMessage, LogLevelDebug, "%s sent ping", client.ID)
 
 			if h.events.OnPing != nil {
 				if err := h.events.OnPing(client, handlerCtx); err != nil {
@@ -316,6 +437,11 @@ func (h *Handler) handleClientWrite(client *Client) {
 	}
 }
 
+func (h *Handler) handleClientReadWithContext(client *Client, handlerCtx *Context) {
+	defer handlerCtx.Cancel()
+	h.handleClientRead(client)
+}
+
 // handleClientRead is a goroutine that reads messages from a client. It reads
 // from the client's websocket connection and processes the messages. If the
 // client's websocket connection is closed or an error occurs when reading from
@@ -323,47 +449,134 @@ func (h *Handler) handleClientWrite(client *Client) {
 // h.handlers.OnDisconnect when the client is done.
 func (h *Handler) handleClientRead(client *Client) {
 	defer func() {
-		h.hub.RemoveClient(client)
-		_ = client.Conn.(*websocket.Conn).Close()
+		if r := recover(); r != nil {
+			h.log(LogTypeError, LogLevelError, "PANIC RECOVERED in handleClientRead (Client: %s): %v", client.ID, r)
+		}
+		h.cleanupClient(client)
+	}()
 
-		if h.events.OnDisconnect != nil {
-			handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
-			// OnDisconnect might return an error, but we're in cleanup so just ignore it
-			_ = h.events.OnDisconnect(client, handlerCtx)
+	conn, ok := client.Conn.(*websocket.Conn)
+	if !ok {
+		h.log(LogTypeError, LogLevelError, "Client %s does not have a websocket connection", client.ID)
+		return
+	}
+
+	handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
+	ctx := handlerCtx.Context()
+
+	messageChan := make(chan struct {
+		messageType int
+		data        []byte
+		err         error
+	}, 1)
+
+	maxViolations := h.rateLimiter.config.MaxRateLimitViolations
+	violations := 0
+
+	go func() {
+		defer close(messageChan)
+		for {
+			if h.rateLimiter != nil && (!h.rateLimiter.AllowClient(client.ID) || !h.rateLimiter.AllowNetAddr(conn.RemoteAddr())) {
+				violations++
+
+				h.log(LogTypeRateLimit, LogLevelInfo, "Rate limit exceeded for client %s (%d/%d violations)", client.ID, violations, maxViolations)
+
+				if violations >= maxViolations {
+					messageChan <- struct {
+						messageType int
+						data        []byte
+						err         error
+					}{0, nil, ErrRateLimitExceeded}
+
+					h.log(LogTypeRateLimit, LogLevelError, "Cancelling read for client %s (%d/%d violations)", client.ID, violations, maxViolations)
+					return
+				}
+
+				continue
+			}
+
+			if err := conn.SetReadDeadline(time.Now().Add(h.config.ReadTimeout)); err != nil {
+				h.log(LogTypeError, LogLevelDebug, "%s set read deadline error: %v", client.ID, err)
+				if h.events.OnError != nil {
+					_ = h.events.OnError(client, newSetReadDeadlineError(err), handlerCtx)
+				}
+				return
+			}
+
+			messageType, data, err := conn.ReadMessage()
+			h.log(LogTypeMessage, LogLevelDebug, "%s read: %s", client.ID, string(data))
+			select {
+			case messageChan <- struct {
+				messageType int
+				data        []byte
+				err         error
+			}{messageType, data, err}:
+			case <-ctx.Done():
+				h.log(LogTypeMessage, LogLevelDebug, "%s read cancelled", client.ID)
+				return
+			}
+
+			if err != nil {
+				return
+			}
 		}
 	}()
 
-	conn := client.Conn.(*websocket.Conn)
-
 	for {
-		messageType, data, err := conn.ReadMessage()
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				if h.events.OnError != nil {
-					handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
-					_ = h.events.OnError(client, err, handlerCtx)
+		select {
+		case <-ctx.Done():
+			h.log(LogTypeMessage, LogLevelDebug, "%s read cancelled", client.ID)
+			_ = conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseGoingAway, ErrServerShutdown.Error()),
+				time.Now().Add(h.config.WriteTimeout),
+			)
+			return
+
+		case msg, ok := <-messageChan:
+			if !ok {
+				h.log(LogTypeMessage, LogLevelDebug, "%s read channel closed", client.ID)
+				return
+			}
+
+			if msg.err != nil {
+				if errors.Is(msg.err, ErrRateLimitExceeded) {
+					h.log(LogTypeRateLimit, LogLevelInfo, "Rate limit exceeded for client %s", client.ID)
+					_ = conn.WriteControl(
+						websocket.CloseMessage,
+						websocket.FormatCloseMessage(websocket.CloseTryAgainLater, ErrRateLimitExceeded.Error()),
+						time.Now().Add(h.config.WriteTimeout),
+					)
 				}
+
+				if websocket.IsUnexpectedCloseError(msg.err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+					h.log(LogTypeError, LogLevelDebug, "%s read error: %v", client.ID, msg.err)
+					if h.events.OnError != nil {
+						_ = h.events.OnError(client, msg.err, handlerCtx)
+					}
+				}
+				return
 			}
-			break
-		}
 
-		// Reset read deadline - if this fails, connection might be in bad state
-		if err := conn.SetReadDeadline(time.Now().Add(h.config.PongWait)); err != nil {
-			if h.events.OnError != nil {
-				handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
-				_ = h.events.OnError(client, fmt.Errorf("failed to set read deadline: %w", err), handlerCtx)
+			// Reset read deadline - if this fails, connection might be in bad state
+			if err := conn.SetReadDeadline(time.Now().Add(h.config.PongWait)); err != nil {
+				h.log(LogTypeError, LogLevelDebug, "%s set read deadline error: %v", client.ID, err)
+				if h.events.OnError != nil {
+					_ = h.events.OnError(client, newSetReadDeadlineError(err), handlerCtx)
+				}
+				return
 			}
-			break
-		}
 
-		message := &Message{
-			Type:    MessageType(messageType),
-			RawData: data,
-			From:    client.ID,
-			Created: time.Now(),
-		}
+			message := &Message{
+				Type:    MessageType(msg.messageType),
+				RawData: msg.data,
+				From:    client.ID,
+				Created: time.Now(),
+			}
 
-		h.processMessage(client, message)
+			h.log(LogTypeMessage, LogLevelDebug, "%s read: %s", client.ID, string(message.RawData))
+			h.processMessage(client, message)
+		}
 	}
 }
 
@@ -379,29 +592,35 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 	handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
 
 	if h.events.OnMessage != nil {
+		h.log(LogTypeMessage, LogLevelDebug, "%s OnMessage: %s", client.ID, string(message.RawData))
 		if err := h.events.OnMessage(client, message, handlerCtx); err != nil {
+			h.log(LogTypeError, LogLevelDebug, "%s OnMessage error: %v", client.ID, err)
 			if h.events.OnError != nil {
-				_ = h.events.OnError(client, err, handlerCtx)
+				_ = h.events.OnError(client, newEventFailedError("OnMessage", err), handlerCtx)
 			}
 		}
 	}
 
 	if h.events.OnRawMessage != nil {
+		h.log(LogTypeMessage, LogLevelDebug, "%s OnRawMessage: %s", client.ID, string(message.RawData))
 		if err := h.events.OnRawMessage(client, message.RawData, handlerCtx); err != nil {
+			h.log(LogTypeError, LogLevelDebug, "%s OnRawMessage error: %v", client.ID, err)
 			if h.events.OnError != nil {
-				_ = h.events.OnError(client, err, handlerCtx)
+				_ = h.events.OnError(client, newEventFailedError("OnRawMessage", err), handlerCtx)
 			}
 		}
 	}
 
 	if h.events.OnJSONMessage != nil {
+		h.log(LogTypeMessage, LogLevelDebug, "%s OnJSONMessage: %s", client.ID, string(message.RawData))
 		var jsonData interface{}
-		if err := json.Unmarshal(message.RawData, &jsonData); err == nil {
+		if err := json.Unmarshal(message.RawData, &jsonData); errors.Is(err, nil) {
 			message.Data = jsonData
 			message.Encoding = JSON
 			if err := h.events.OnJSONMessage(client, jsonData, handlerCtx); err != nil {
+				h.log(LogTypeError, LogLevelDebug, "%s OnJSONMessage error: %v", client.ID, err)
 				if h.events.OnError != nil {
-					_ = h.events.OnError(client, err, handlerCtx)
+					_ = h.events.OnError(client, newEventFailedError("OnJSONMessage", err), handlerCtx)
 				}
 			}
 		}
@@ -409,15 +628,63 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 	// TODO: add Protobuf and other formats
 }
 
+func (h *Handler) initConnectionPool() {
+	if h.config.MaxConnections > 0 {
+		h.connectionPool = NewConnectionPool(
+			h.config.MaxConnections,
+			h.config.MaxConnectionsPerIP,
+		)
+		h.log(LogTypeConnection, LogLevelInfo,
+			"Connection pool initialized: max_total=%d, max_per_ip=%d",
+			h.config.MaxConnections, h.config.MaxConnectionsPerIP)
+	} else {
+		h.log(LogTypeConnection, LogLevelWarn, "Connection pool disabled: MaxConnections is 0")
+	}
+}
+
 // ensureHubRunning starts the hub if it is not already running.
 // It is safe to call concurrently.
-func (h *Handler) ensureHubRunning() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
+func (h *Handler) ensureHubRunning(ctx context.Context) {
 	h.hubRunning.Do(func() {
-		go h.hub.Run()
+		go h.hub.Run(ctx)
 	})
+}
+
+func (h *Handler) cleanupClient(client *Client) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.log(LogTypeError, LogLevelError, "PANIC RECOVERED in cleanup for client %s: %v", client.ID, r)
+		}
+	}()
+
+	if h.hub != nil {
+		h.log(LogTypeClient, LogLevelDebug, "Removing client %s from hub", client.ID)
+		h.hub.RemoveClient(client)
+	}
+
+	if client.Conn != nil {
+		if conn, ok := client.Conn.(*websocket.Conn); ok {
+			h.log(LogTypeClient, LogLevelDebug, "Closing client %s connection", client.ID)
+			_ = conn.Close()
+		}
+	}
+
+	if h.events.OnDisconnect != nil {
+		h.log(LogTypeClient, LogLevelDebug, "Calling OnDisconnect for client %s", client.ID)
+		handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
+		_ = h.events.OnDisconnect(client, handlerCtx)
+	}
+}
+
+func (h *Handler) log(logType LogType, level LogLevel, msg string, args ...interface{}) {
+	lvl, ok := h.logger.Level[logType]
+	if !ok {
+		lvl = LogLevelNone
+	}
+
+	if level <= lvl {
+		h.logger.Logger.Log(logType, level, msg, args...)
+	}
 }
 
 // extractHeaders extracts relevant headers from the given http request.
@@ -425,18 +692,19 @@ func (h *Handler) ensureHubRunning() {
 // headers are considered: Authorization, X-Forwarded-For, X-Real-IP,
 // Accept, Accept-Language, and Accept-Encoding. If a header is not
 // present in the request, it is not included in the returned map.
-func extractHeaders(r *http.Request) map[string]string {
+func extractHeaders(r *http.Request, extraHeaders ...string) map[string]string {
 	headers := make(map[string]string)
 
 	// common headers that might be useful in handlers
-	relevantHeaders := []string{
+	relevantHeaders := []string{ // TODO: make configurable
 		"Authorization",
 		"X-Forwarded-For",
-		"X-Real-IP",
+		"X-Real-Ip",
 		"Accept",
 		"Accept-Language",
 		"Accept-Encoding",
 	}
+	relevantHeaders = append(relevantHeaders, extraHeaders...)
 
 	for _, header := range relevantHeaders {
 		if value := r.Header.Get(header); value != "" {
@@ -452,13 +720,15 @@ func extractHeaders(r *http.Request) map[string]string {
 // address from the header. Otherwise, it returns the IP address from the remote address.
 // The IP address is returned as a string in the format "192.0.2.1".
 func getClientIPFromRequest(r *http.Request) string {
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+	if ip := r.Header.Get("X-Real-Ip"); ip != "" {
 		return ip
 	}
 	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
-		return strings.Split(ip, ",")[0]
+		ip, _, _ := net.SplitHostPort(ip)
+		return ip
 	}
-	return strings.Split(r.RemoteAddr, ":")[0]
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	return ip
 }
 
 // generateRequestID returns a unique request ID as a string. The request ID

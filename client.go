@@ -5,7 +5,7 @@ package gosocket
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"sync"
 )
 
@@ -52,6 +52,9 @@ type IClient interface {
 	// The client's connection to the server is closed.
 	Disconnect() error
 
+	// IsConnected checks if the client is currently connected to the server.
+	IsConnected() bool
+
 	// SetUserData sets arbitrary user data associated with the client.
 	// The data is stored on the client and can be retrieved later.
 	SetUserData(key string, value interface{})
@@ -82,12 +85,12 @@ type Client struct {
 //
 // The created Client instance will also have a map to store user custom data.
 // The map will be empty initially.
-func NewClient(id string, conn IWebSocketConn, hub IHub) *Client {
+func NewClient(id string, conn IWebSocketConn, hub IHub, messageChanBufSize int) *Client {
 	return &Client{
 		ID:          id,
 		Conn:        conn,
 		Hub:         hub,
-		MessageChan: make(chan []byte, 256),
+		MessageChan: make(chan []byte, messageChanBufSize),
 		UserData:    make(map[string]interface{}),
 		ConnInfo:    nil, // will be defined at HandleWebSocket
 	}
@@ -98,15 +101,29 @@ func NewClient(id string, conn IWebSocketConn, hub IHub) *Client {
 //
 // This method is safe to call concurrently.
 func (c *Client) Send(message []byte) error {
+	defer func() {
+		if r := recover(); r != nil {
+			c.Hub.Log(LogTypeClient, LogLevelError, "PANIC RECOVERED in Client.Send (ID: %s): %v", c.ID, r)
+		}
+	}()
+
+	c.mu.Lock()
 	if c.Conn == nil {
-		return fmt.Errorf("client connection is nil")
+		c.mu.Unlock()
+		c.Hub.Log(LogTypeClient, LogLevelError, "Client.Send (ID: %s): Connection is nil", c.ID)
+		return ErrClientConnNil
 	}
+	c.mu.Unlock()
 
 	select {
 	case c.MessageChan <- message:
 		return nil
 	default:
-		return fmt.Errorf("client message channel is full")
+		c.Hub.Log(LogTypeClient, LogLevelError, "Client.Send (ID: %s): Message channel is full", c.ID)
+		safeGoroutine("Client.Disconnect", func() {
+			_ = c.Disconnect()
+		})
+		return ErrClientFull
 	}
 }
 
@@ -129,6 +146,7 @@ func (c *Client) SendMessage(message *Message) error {
 	if message.Data != nil {
 		// JSON fallback
 		if message.Encoding == 0 {
+			c.Hub.Log(LogTypeClient, LogLevelDebug, "Client.SendMessage (ID: %s): Encoding not specified, assuming JSON", c.ID)
 			message.Encoding = JSON
 		}
 
@@ -139,13 +157,14 @@ func (c *Client) SendMessage(message *Message) error {
 			if rawData, ok := message.Data.([]byte); ok {
 				return c.Send(rawData)
 			}
-			return fmt.Errorf("raw encoding expects []byte data")
+			return ErrRawEncoding
 		default:
-			return fmt.Errorf("unsupported encoding: %d", message.Encoding)
+			c.Hub.Log(LogTypeClient, LogLevelError, "Client.SendMessage (ID: %s): Unsupported encoding: %s", c.ID, message.Encoding)
+			return newUnsupportedEncodingError(message.Encoding)
 		}
 	}
 
-	return fmt.Errorf("message has no data to send")
+	return ErrNoDataToSend
 }
 
 // SendData sends the given data to the client. It will be sent as JSON if no encoding type is specified.
@@ -173,9 +192,10 @@ func (c *Client) SendDataWithEncoding(data interface{}, encoding EncodingType) e
 		if rawData, ok := data.([]byte); ok {
 			return c.Send(rawData)
 		}
-		return fmt.Errorf("raw encoding expects []byte data")
+		return ErrRawEncoding
 	default:
-		return fmt.Errorf("unsupported encoding: %d", encoding)
+		c.Hub.Log(LogTypeClient, LogLevelError, "Client.SendDataWithEncoding (ID: %s): Unsupported encoding: %s", c.ID, encoding)
+		return newUnsupportedEncodingError(encoding)
 	}
 }
 
@@ -190,7 +210,7 @@ func (c *Client) SendDataWithEncoding(data interface{}, encoding EncodingType) e
 func (c *Client) SendJSON(data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("failed to marshal JSON: %w", err)
+		return newSerializeError(err)
 	}
 	return c.Send(jsonData)
 }
@@ -203,7 +223,7 @@ func (c *Client) SendJSON(data interface{}) error {
 //
 // TODO: implement
 func (c *Client) SendProtobuf(data interface{}) error {
-	return fmt.Errorf("protobuf serialization not yet implemented")
+	return errors.New("protobuf serialization not yet implemented")
 }
 
 // JoinRoom joins the given room. It will return an error if the client's hub is
@@ -212,7 +232,7 @@ func (c *Client) SendProtobuf(data interface{}) error {
 // This method is safe to call concurrently.
 func (c *Client) JoinRoom(room string) error {
 	if c.Hub == nil {
-		return fmt.Errorf("client hub is nil")
+		return ErrHubIsNil
 	}
 	c.Hub.JoinRoom(c, room)
 	return nil
@@ -224,7 +244,7 @@ func (c *Client) JoinRoom(room string) error {
 // This method is safe to call concurrently.
 func (c *Client) LeaveRoom(room string) error {
 	if c.Hub == nil {
-		return fmt.Errorf("client hub is nil")
+		return ErrHubIsNil
 	}
 	c.Hub.LeaveRoom(c, room)
 	return nil
@@ -255,14 +275,27 @@ func (c *Client) GetRooms() []string {
 //
 // This method is safe to call concurrently.
 func (c *Client) Disconnect() error {
+	var err error
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.Hub != nil {
 		c.Hub.RemoveClient(c)
 	}
 
 	if c.Conn != nil {
-		return c.Conn.Close()
+		err = c.Conn.Close()
+		c.Conn = nil
 	}
-	return nil
+
+	return err
+}
+
+func (c *Client) IsConnected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.Conn != nil
 }
 
 // SetUserData sets a value for a key in the client's user data map.

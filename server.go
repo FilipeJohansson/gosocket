@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -133,22 +134,34 @@ func NewServer(options ...UniversalOption) (*Server, error) {
 // encounters an error, this function will return an error.
 func (s *Server) Start() (err error) {
 	defer func() {
+		if r := recover(); r != nil {
+			s.handler.log(LogTypeError, LogLevelError, "PANIC RECOVERED in Server.Start: %v\nStack trace:\n%s\n", r, string(debug.Stack()))
+			err = fmt.Errorf("server start panic: %v", r)
+		}
+
 		if err != nil {
-			err = fmt.Errorf("[GoSocket] server stopped with error: %w", err)
+			err = newServerStoppedError(err)
 		}
 	}()
 
 	s.mu.Lock()
 	if s.isRunning {
 		s.mu.Unlock()
-		return fmt.Errorf("server is already running")
+		return ErrServerAlreadyRunning
 	}
 
 	if len(s.handler.Serializers()) <= 0 {
-		s.handler.AddSerializer(JSON, JSONSerializer{}) // JSON as default serializer
+		s.handler.log(LogTypeServer, LogLevelDebug, "No serializers configured, using JSON as default serializer")
+		s.handler.AddSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig())) // JSON as default serializer
 	}
 
-	go s.handler.Hub().Run()
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+
+	defer hubCancel()
+
+	safeGoroutine("HubRun", func() {
+		s.handler.Hub().Run(hubCtx)
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.config.Path, s.handler.HandleWebSocket)
@@ -157,29 +170,36 @@ func (s *Server) Start() (err error) {
 	httpHandler = s.handler.ApplyMiddlewares(httpHandler)
 
 	s.server = s.buildHttpServer(httpHandler)
-
 	s.isRunning = true
 	s.mu.Unlock()
 
-	fmt.Printf("GoSocket server starting on port %d, path %s\n", s.config.Port, s.config.Path)
+	defer func() {
+		s.mu.Lock()
+		s.isRunning = false
+		s.mu.Unlock()
+
+		hubCancel()
+
+		if s.handler != nil && s.handler.Hub() != nil {
+			s.handler.Hub().Stop()
+		}
+	}()
+
+	s.handler.log(LogTypeServer, LogLevelInfo, "Starting GoSocket server on port %d, path %s", s.config.Port, s.config.Path)
 	if s.config.EnableSSL {
+		s.handler.log(LogTypeServer, LogLevelInfo, "SSL enabled")
 		s.server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		err = s.server.ListenAndServeTLS(s.config.CertFile, s.config.KeyFile)
 	} else {
 		err = s.server.ListenAndServe()
 	}
 
-	s.mu.Lock()
-	s.isRunning = false
-	s.mu.Unlock()
-	s.handler.Hub().Stop()
-
-	if err == http.ErrServerClosed {
-		fmt.Println("GoSocket server stopped gracefully")
+	if errors.Is(err, http.ErrServerClosed) {
+		s.handler.log(LogTypeServer, LogLevelInfo, "GoSocket server stopped gracefully")
 		return nil
 	}
 
-	return
+	return err
 }
 
 // StartWithContext starts the GoSocket server and returns an error. It will start listening on the configured
@@ -193,21 +213,25 @@ func (s *Server) Start() (err error) {
 func (s *Server) StartWithContext(ctx context.Context) (err error) {
 	defer func() {
 		if err != nil {
-			err = fmt.Errorf("[GoSocket] server stopped with error: %w", err)
+			err = newServerStoppedError(err)
 		}
 	}()
 
 	s.mu.Lock()
 	if s.isRunning {
 		s.mu.Unlock()
-		return fmt.Errorf("server is already running")
+		return ErrServerAlreadyRunning
 	}
 
 	if len(s.handler.Serializers()) <= 0 {
-		s.handler.AddSerializer(JSON, JSONSerializer{}) // JSON as default serializer
+		s.handler.log(LogTypeServer, LogLevelDebug, "No serializers configured, using JSON as default serializer")
+		s.handler.AddSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig())) // JSON as default serializer
 	}
 
-	go s.handler.Hub().Run()
+	hubCtx, hubCancel := context.WithCancel(ctx)
+	defer hubCancel()
+
+	go s.handler.Hub().Run(hubCtx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.config.Path, s.handler.HandleWebSocket)
@@ -216,53 +240,38 @@ func (s *Server) StartWithContext(ctx context.Context) (err error) {
 	handler = s.handler.ApplyMiddlewares(handler)
 
 	s.server = s.buildHttpServer(handler)
-
 	s.isRunning = true
 	s.mu.Unlock()
 
 	errChan := make(chan error, 1)
 
 	go func() {
-		fmt.Printf("GoSocket server starting on port %d, path %s\n", s.config.Port, s.config.Path)
+		defer close(errChan)
+
+		s.handler.log(LogTypeServer, LogLevelInfo, "Starting GoSocket server on port %d, path %s", s.config.Port, s.config.Path)
+		var serverErr error
 		if s.config.EnableSSL {
+			s.handler.log(LogTypeServer, LogLevelInfo, "SSL enabled")
 			s.server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-			err = s.server.ListenAndServeTLS(s.config.CertFile, s.config.KeyFile)
+			serverErr = s.server.ListenAndServeTLS(s.config.CertFile, s.config.KeyFile)
 		} else {
-			err = s.server.ListenAndServe()
+			serverErr = s.server.ListenAndServe()
 		}
 
-		if err != http.ErrServerClosed {
-			errChan <- err
-		}
+		errChan <- serverErr
 	}()
+
+	defer s.performGracefulShutdown(5*time.Second, hubCancel)
 
 	select {
 	case <-ctx.Done():
 		// context canceled, shutdown graceful
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		s.mu.Lock()
-		s.isRunning = false
-		s.mu.Unlock()
-
-		if s.handler != nil && s.handler.Hub() != nil {
-			s.handler.Hub().Stop()
-		}
-
-		if err := s.server.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("server shutdown error: %w", err)
-		}
-
-		fmt.Println("GoSocket server stopped by context")
 		return ctx.Err()
 
 	case err := <-errChan:
-		s.mu.Lock()
-		s.isRunning = false
-		s.mu.Unlock()
-		s.handler.Hub().Stop()
-
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
 		return err
 	}
 }
@@ -272,14 +281,11 @@ func (s *Server) StartWithContext(ctx context.Context) (err error) {
 // encounters an error while stopping, this function will return an error. This function will also return an error
 // if the server's underlying net.Listener cannot be closed.
 func (s *Server) Stop() error {
-	s.mu.RLock()
-	if !s.isRunning || s.server == nil {
-		s.mu.RUnlock()
-		return fmt.Errorf("server is not running")
-	}
-	s.mu.RUnlock()
-
 	s.mu.Lock()
+	if !s.isRunning || s.server == nil {
+		s.mu.Unlock()
+		return ErrServerNotRunning
+	}
 	s.isRunning = false
 	s.mu.Unlock()
 
@@ -287,6 +293,7 @@ func (s *Server) Stop() error {
 		s.handler.Hub().Stop()
 	}
 
+	s.handler.log(LogTypeServer, LogLevelInfo, "Stopping GoSocket server")
 	return s.server.Close()
 }
 
@@ -295,25 +302,24 @@ func (s *Server) Stop() error {
 // encounters an error while stopping, this function will return an error. This function will also return an error if the server's
 // underlying net.Listener cannot be closed.
 func (s *Server) StopGracefully(timeout time.Duration) error {
-	s.mu.RLock()
-	if !s.isRunning || s.server == nil {
-		s.mu.RUnlock()
-		return fmt.Errorf("server is not running")
-	}
-	s.mu.RUnlock()
-
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	s.mu.Lock()
+	if !s.isRunning || s.server == nil {
+		s.mu.Unlock()
+		return ErrServerNotRunning
+	}
 	s.isRunning = false
+	srv := s.server
 	s.mu.Unlock()
 
 	if s.handler != nil && s.handler.Hub() != nil {
 		s.handler.Hub().Stop()
 	}
 
-	return s.server.Shutdown(ctx)
+	s.handler.log(LogTypeServer, LogLevelInfo, "Stopping GoSocket server gracefully")
+	return srv.Shutdown(ctx)
 }
 
 // With applies the given options to the server. The options are applied in the
@@ -323,6 +329,7 @@ func (s *Server) StopGracefully(timeout time.Duration) error {
 func (s *Server) With(options ...UniversalOption) (*Server, error) {
 	for _, o := range options {
 		if err := o(s); err != nil {
+			s.handler.log(LogTypeServer, LogLevelError, "Failed to apply option: %s", err.Error())
 			return nil, err
 		}
 	}
@@ -337,7 +344,7 @@ func (s *Server) With(options ...UniversalOption) (*Server, error) {
 // will return an error.
 func (s *Server) Broadcast(message []byte) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return fmt.Errorf("server not properly initialized")
+		return ErrServerNotInitialized
 	}
 
 	msg := NewRawMessage(TextMessage, message)
@@ -349,7 +356,7 @@ func (s *Server) Broadcast(message []byte) error {
 // initialized, this function will return an error.
 func (s *Server) BroadcastMessage(message *Message) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return fmt.Errorf("server not properly initialized")
+		return ErrServerNotInitialized
 	}
 
 	s.handler.Hub().BroadcastMessage(message)
@@ -365,12 +372,13 @@ func (s *Server) BroadcastData(data interface{}) error {
 	serializer := s.handler.Serializers()[s.handler.Config().DefaultEncoding]
 	if serializer == nil {
 		// JSON fallback
+		s.handler.AddSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig()))
 		return s.BroadcastJSON(data)
 	}
 
 	rawData, err := serializer.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("failed to serialize data: %w", err)
+		return newSerializeError(err)
 	}
 
 	return s.Broadcast(rawData)
@@ -384,12 +392,12 @@ func (s *Server) BroadcastData(data interface{}) error {
 func (s *Server) BroadcastDataWithEncoding(data interface{}, encoding EncodingType) error {
 	serializer := s.handler.Serializers()[encoding]
 	if serializer == nil {
-		return fmt.Errorf("serializer not found for encoding: %d", encoding)
+		return newSerializerNotFoundError(encoding)
 	}
 
 	rawData, err := serializer.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("failed to serialize data: %w", err)
+		return newSerializeError(err)
 	}
 
 	return s.Broadcast(rawData)
@@ -400,9 +408,17 @@ func (s *Server) BroadcastDataWithEncoding(data interface{}, encoding EncodingTy
 // an error is returned. If the server is not properly initialized, this function
 // will return an error.
 func (s *Server) BroadcastJSON(data interface{}) error {
-	jsonData, err := json.Marshal(data)
+	if s.handler == nil || s.handler.Hub() == nil {
+		return ErrServerNotInitialized
+	}
+
+	if s.handler.serializers[JSON] == nil {
+		return newSerializerNotFoundError(JSON)
+	}
+
+	jsonData, err := s.handler.serializers[JSON].Marshal(data)
 	if err != nil {
-		return fmt.Errorf("failed to marshal JSON: %w", err)
+		return newSerializeError(err)
 	}
 
 	return s.Broadcast(jsonData)
@@ -421,7 +437,7 @@ func (s *Server) BroadcastProtobuf(data interface{}) error {
 // function will return an error.
 func (s *Server) BroadcastToRoom(room string, message []byte) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return fmt.Errorf("server not properly initialized")
+		return ErrServerNotInitialized
 	}
 
 	msg := NewRawMessage(TextMessage, message)
@@ -444,7 +460,7 @@ func (s *Server) BroadcastToRoomData(room string, data interface{}) error {
 
 	rawData, err := serializer.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("failed to serialize data: %w", err)
+		return newSerializeError(err)
 	}
 
 	return s.BroadcastToRoom(room, rawData)
@@ -457,7 +473,7 @@ func (s *Server) BroadcastToRoomData(room string, data interface{}) error {
 func (s *Server) BroadcastToRoomJSON(room string, data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("failed to marshal JSON: %w", err)
+		return newSerializeError(err)
 	}
 
 	return s.BroadcastToRoom(room, jsonData)
@@ -491,8 +507,7 @@ func (s *Server) GetClients() []*Client {
 // GetClient returns a client by its ID. If no client with the given ID exists,
 // nil is returned. This method is safe to call concurrently.
 func (s *Server) GetClient(id string) *Client {
-	clients := s.GetClients()
-	for _, client := range clients {
+	for client := range s.handler.Hub().GetClients() {
 		if client.ID == id {
 			return client
 		}
@@ -529,7 +544,7 @@ func (s *Server) GetClientCount() int {
 func (s *Server) DisconnectClient(id string) error {
 	client := s.GetClient(id)
 	if client == nil {
-		return fmt.Errorf("client not found: %s", id)
+		return newClientNotFoundError(id)
 	}
 
 	return client.Disconnect()
@@ -543,7 +558,7 @@ func (s *Server) DisconnectClient(id string) error {
 // Thismethod is safe to call concurrently.
 func (s *Server) CreateRoom(name string) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return fmt.Errorf("server not properly initialized")
+		return ErrServerNotInitialized
 	}
 
 	return s.handler.Hub().CreateRoom(name)
@@ -555,7 +570,7 @@ func (s *Server) CreateRoom(name string) error {
 // This method is safe to call concurrently.
 func (s *Server) DeleteRoom(name string) error {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return fmt.Errorf("server not properly initialized")
+		return ErrServerNotInitialized
 	}
 
 	return s.handler.Hub().DeleteRoom(name)
@@ -586,7 +601,7 @@ func (s *Server) GetRooms() []string {
 func (s *Server) JoinRoom(clientID, room string) error {
 	client := s.GetClient(clientID)
 	if client == nil {
-		return fmt.Errorf("client not found: %s", clientID)
+		return newClientNotFoundError(clientID)
 	}
 
 	return client.JoinRoom(room)
@@ -598,7 +613,7 @@ func (s *Server) JoinRoom(clientID, room string) error {
 func (s *Server) LeaveRoom(clientID, room string) error {
 	client := s.GetClient(clientID)
 	if client == nil {
-		return fmt.Errorf("client not found: %s", clientID)
+		return newClientNotFoundError(clientID)
 	}
 
 	return client.LeaveRoom(room)
@@ -623,6 +638,74 @@ func (s *Server) buildHttpServer(httpHandler http.Handler) *http.Server {
 	return server
 }
 
+func (s *Server) performGracefulShutdown(timeout time.Duration, hubCancel context.CancelFunc) {
+	s.mu.Lock()
+	wasRunning := s.isRunning
+	s.isRunning = false
+	s.mu.Unlock()
+
+	if !wasRunning {
+		return
+	}
+
+	hubCancel()
+
+	if s.handler != nil && s.handler.Hub() != nil {
+		s.notifyClientsShutdown()
+	}
+
+	if s.handler != nil && s.handler.Hub() != nil {
+		s.handler.Hub().Stop()
+	}
+
+	if s.server != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		if err := s.server.Shutdown(shutdownCtx); err != nil {
+			s.handler.log(LogTypeError, LogLevelError, "error shutting down server: %v\n", err)
+			_ = s.server.Close()
+		}
+
+		s.handler.log(LogTypeServer, LogLevelInfo, "server shutdown")
+	}
+}
+
+func (s *Server) notifyClientsShutdown() {
+	if s.handler == nil || s.handler.Hub() == nil {
+		return
+	}
+
+	clients := s.handler.Hub().GetClients()
+	shutdownMessage := map[string]interface{}{
+		"type":      "server_shutdown",
+		"message":   "Server is shutting down",
+		"timestamp": time.Now(),
+	}
+
+	msg := NewMessage(TextMessage, shutdownMessage)
+	msg.Encoding = JSON
+
+	for client := range clients {
+		go func(c *Client) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			select {
+			case c.MessageChan <- func() []byte {
+				data, _ := json.Marshal(shutdownMessage)
+				return data
+			}():
+			case <-ctx.Done():
+				_ = c.Disconnect()
+			}
+		}(client)
+	}
+
+	// give clients time to receive the shutdown message
+	time.Sleep(500 * time.Millisecond)
+}
+
 // ===== Functional Options =====
 
 // WithPort sets the port number for the server to listen on. If the port is outside the valid range
@@ -631,11 +714,11 @@ func WithPort(port int) UniversalOption {
 	return func(h HasHandler) error {
 		server, ok := h.(*Server)
 		if !ok {
-			return fmt.Errorf("WithPort can only be used with Server, got %T", h)
+			return newWithOnlyServerError("WithPort", h)
 		}
 
 		if port <= 0 || port > 65535 {
-			return fmt.Errorf("[WithPort] invalid port: %d", port)
+			return newInvalidPortError(port)
 		}
 
 		server.config.Port = port
@@ -648,7 +731,7 @@ func WithPath(path string) UniversalOption {
 	return func(h HasHandler) error {
 		server, ok := h.(*Server)
 		if !ok {
-			return fmt.Errorf("WithPath can only be used with Server, got %T", h)
+			return newWithOnlyServerError("WithPath", h)
 		}
 
 		if path == "" {
@@ -673,7 +756,7 @@ func WithCORS(enabled bool) UniversalOption {
 	return func(h HasHandler) error {
 		server, ok := h.(*Server)
 		if !ok {
-			return fmt.Errorf("WithCORS can only be used with Server, got %T", h)
+			return newWithOnlyServerError("WithCORS", h)
 		}
 
 		server.config.EnableCORS = enabled
@@ -689,11 +772,11 @@ func WithSSL(certFile, keyFile string) UniversalOption {
 	return func(h HasHandler) error {
 		server, ok := h.(*Server)
 		if !ok {
-			return fmt.Errorf("WithSSL can only be used with Server, got %T", h)
+			return newWithOnlyServerError("WithSSL", h)
 		}
 
 		if certFile == "" || keyFile == "" {
-			return errors.New("[WithSSL] certFile or keyFile is empty")
+			return ErrSSLFilesEmpty
 		}
 
 		server.config.EnableSSL = true

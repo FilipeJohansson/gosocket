@@ -1,6 +1,7 @@
 package gosocket
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -50,7 +51,7 @@ func NewMockHub() *MockHub {
 	}
 }
 
-func (m *MockHub) Run() {
+func (m *MockHub) Run(ctx context.Context) {
 	m.Called()
 }
 
@@ -77,7 +78,7 @@ func (m *MockHub) BroadcastToRoom(room string, message *Message) {
 func (m *MockHub) CreateRoom(name string) error {
 	m.Called(name)
 	if name == "" {
-		return fmt.Errorf("room name cannot be empty")
+		return ErrRoomNameEmpty
 	}
 
 	m.mu.Lock()
@@ -174,6 +175,10 @@ func (m *MockHub) IsRunning() bool {
 	return m.running
 }
 
+func (m *MockHub) Log(logType LogType, level LogLevel, format string, args ...interface{}) {
+	m.Called(logType, level, format, args)
+}
+
 func TestNewClient(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -186,7 +191,7 @@ func TestNewClient(t *testing.T) {
 			name: "creates client with valid parameters",
 			id:   "test-client-1",
 			conn: &MockWebSocketConn{},
-			hub:  NewHub(),
+			hub:  NewHub(DefaultLoggerConfig()),
 			expected: func(c *Client) {
 				assert.Equal(t, "test-client-1", c.ID)
 				assert.NotNil(t, c.Conn)
@@ -200,7 +205,7 @@ func TestNewClient(t *testing.T) {
 			name: "creates client with nil connection",
 			id:   "test-client-2",
 			conn: nil,
-			hub:  NewHub(),
+			hub:  NewHub(DefaultLoggerConfig()),
 			expected: func(c *Client) {
 				assert.Equal(t, "test-client-2", c.ID)
 				assert.Nil(t, c.Conn)
@@ -222,7 +227,7 @@ func TestNewClient(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := NewClient(tt.id, tt.conn, tt.hub)
+			client := NewClient(tt.id, tt.conn, tt.hub, 256)
 			tt.expected(client)
 		})
 	}
@@ -230,39 +235,42 @@ func TestNewClient(t *testing.T) {
 
 func TestClient_Send(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupClient   func() *Client
-		message       []byte
-		expectedError string
+		name            string
+		setupClient     func() *Client
+		message         []byte
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "sends message successfully",
 			setupClient: func() *Client {
-				return NewClient("test", &MockWebSocketConn{}, NewHub())
+				return NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 			},
-			message:       []byte("test message"),
-			expectedError: "",
+			message:         []byte("test message"),
+			isExpectedError: false,
 		},
 		{
 			name: "fails when connection is nil",
 			setupClient: func() *Client {
-				return NewClient("test", nil, NewHub())
+				return NewClient("test", nil, NewHub(DefaultLoggerConfig()), 256)
 			},
-			message:       []byte("test message"),
-			expectedError: "client connection is nil",
+			message:         []byte("test message"),
+			isExpectedError: true,
+			expectedError:   ErrClientConnNil,
 		},
 		{
 			name: "fails when message channel is full",
 			setupClient: func() *Client {
-				client := NewClient("test", &MockWebSocketConn{}, NewHub())
+				client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 				// Fill the channel to capacity
 				for i := 0; i < cap(client.MessageChan); i++ {
 					client.MessageChan <- []byte("fill")
 				}
 				return client
 			},
-			message:       []byte("test message"),
-			expectedError: "client message channel is full",
+			message:         []byte("test message"),
+			isExpectedError: true,
+			expectedError:   ErrClientFull,
 		},
 	}
 
@@ -271,7 +279,7 @@ func TestClient_Send(t *testing.T) {
 			client := tt.setupClient()
 			err := client.Send(tt.message)
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 				// Verify message was sent to channel
 				select {
@@ -282,7 +290,7 @@ func TestClient_Send(t *testing.T) {
 				}
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
@@ -290,16 +298,17 @@ func TestClient_Send(t *testing.T) {
 
 func TestClient_SendMessage(t *testing.T) {
 	tests := []struct {
-		name          string
-		message       *Message
-		expectedError string
+		name            string
+		message         *Message
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "sends message with raw data",
 			message: &Message{
 				RawData: []byte("raw data"),
 			},
-			expectedError: "",
+			isExpectedError: false,
 		},
 		{
 			name: "sends JSON message",
@@ -307,14 +316,14 @@ func TestClient_SendMessage(t *testing.T) {
 				Data:     map[string]string{"key": "value"},
 				Encoding: JSON,
 			},
-			expectedError: "",
+			isExpectedError: false,
 		},
 		{
 			name: "sends JSON message with default encoding",
 			message: &Message{
 				Data: map[string]string{"key": "value"},
 			},
-			expectedError: "",
+			isExpectedError: false,
 		},
 		{
 			name: "sends raw message with byte data",
@@ -322,7 +331,7 @@ func TestClient_SendMessage(t *testing.T) {
 				Data:     []byte("raw bytes"),
 				Encoding: Raw,
 			},
-			expectedError: "",
+			isExpectedError: false,
 		},
 		{
 			name: "fails with raw encoding and non-byte data",
@@ -330,7 +339,8 @@ func TestClient_SendMessage(t *testing.T) {
 				Data:     "string data",
 				Encoding: Raw,
 			},
-			expectedError: "raw encoding expects []byte data",
+			isExpectedError: true,
+			expectedError:   ErrRawEncoding,
 		},
 		{
 			name: "fails with unsupported encoding",
@@ -338,23 +348,25 @@ func TestClient_SendMessage(t *testing.T) {
 				Data:     "test data",
 				Encoding: EncodingType(999),
 			},
-			expectedError: "unsupported encoding: 999",
+			isExpectedError: true,
+			expectedError:   newUnsupportedEncodingError(EncodingType(999)),
 		},
 		{
 			name: "fails with no data",
 			message: &Message{
 				Type: TextMessage,
 			},
-			expectedError: "message has no data to send",
+			isExpectedError: true,
+			expectedError:   ErrNoDataToSend,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := NewClient("test", &MockWebSocketConn{}, NewHub())
+			client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 			err := client.SendMessage(tt.message)
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 				// Verify message was sent to channel
 				select {
@@ -365,14 +377,14 @@ func TestClient_SendMessage(t *testing.T) {
 				}
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
 }
 
 func TestClient_SendData(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub())
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 
 	testData := map[string]interface{}{
 		"message": "hello",
@@ -397,47 +409,50 @@ func TestClient_SendData(t *testing.T) {
 
 func TestClient_SendDataWithEncoding(t *testing.T) {
 	tests := []struct {
-		name          string
-		data          interface{}
-		encoding      EncodingType
-		expectedError string
+		name            string
+		data            interface{}
+		encoding        EncodingType
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
-			name:          "sends JSON data",
-			data:          map[string]string{"key": "value"},
-			encoding:      JSON,
-			expectedError: "",
+			name:            "sends JSON data",
+			data:            map[string]string{"key": "value"},
+			encoding:        JSON,
+			isExpectedError: false,
 		},
 		{
-			name:          "sends raw byte data",
-			data:          []byte("raw data"),
-			encoding:      Raw,
-			expectedError: "",
+			name:            "sends raw byte data",
+			data:            []byte("raw data"),
+			encoding:        Raw,
+			isExpectedError: false,
 		},
 		{
-			name:          "fails with raw encoding and non-byte data",
-			data:          "string data",
-			encoding:      Raw,
-			expectedError: "raw encoding expects []byte data",
+			name:            "fails with raw encoding and non-byte data",
+			data:            "string data",
+			encoding:        Raw,
+			isExpectedError: true,
+			expectedError:   ErrRawEncoding,
 		},
 		{
-			name:          "fails with unsupported encoding",
-			data:          "test data",
-			encoding:      EncodingType(999),
-			expectedError: "unsupported encoding: 999",
+			name:            "fails with unsupported encoding",
+			data:            "test data",
+			encoding:        EncodingType(999),
+			isExpectedError: true,
+			expectedError:   newUnsupportedEncodingError(EncodingType(999)),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := NewClient("test", &MockWebSocketConn{}, NewHub())
+			client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 			err := client.SendDataWithEncoding(tt.data, tt.encoding)
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
@@ -445,39 +460,41 @@ func TestClient_SendDataWithEncoding(t *testing.T) {
 
 func TestClient_SendJSON(t *testing.T) {
 	tests := []struct {
-		name          string
-		data          interface{}
-		expectedError string
+		name            string
+		data            interface{}
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
-			name:          "sends valid JSON data",
-			data:          map[string]string{"key": "value"},
-			expectedError: "",
+			name:            "sends valid JSON data",
+			data:            map[string]string{"key": "value"},
+			isExpectedError: false,
 		},
 		{
-			name:          "fails with invalid JSON data",
-			data:          make(chan int), // channels can't be marshaled to JSON
-			expectedError: "failed to marshal JSON",
+			name:            "fails with invalid JSON data",
+			data:            make(chan int), // channels can't be marshaled to JSON
+			isExpectedError: true,
+			expectedError:   ErrSerializeData,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := NewClient("test", &MockWebSocketConn{}, NewHub())
+			client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 			err := client.SendJSON(tt.data)
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
 }
 
 func TestClient_SendProtobuf(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub())
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 	err := client.SendProtobuf("test data")
 
 	assert.Error(t, err)
@@ -486,30 +503,32 @@ func TestClient_SendProtobuf(t *testing.T) {
 
 func TestClient_JoinRoom(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupClient   func() *Client
-		room          string
-		expectedError string
+		name            string
+		setupClient     func() *Client
+		room            string
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "joins room successfully",
 			setupClient: func() *Client {
 				mockHub := NewMockHub()
 				mockHub.On("JoinRoom", mock.AnythingOfType("*gosocket.Client"), "test-room")
-				client := NewClient("test", &MockWebSocketConn{}, nil)
+				client := NewClient("test", &MockWebSocketConn{}, nil, 256)
 				client.Hub = mockHub // Type assertion bypass for testing
 				return client
 			},
-			room:          "test-room",
-			expectedError: "",
+			room:            "test-room",
+			isExpectedError: false,
 		},
 		{
 			name: "fails when hub is nil",
 			setupClient: func() *Client {
-				return NewClient("test", &MockWebSocketConn{}, nil)
+				return NewClient("test", &MockWebSocketConn{}, nil, 256)
 			},
-			room:          "test-room",
-			expectedError: "client hub is nil",
+			room:            "test-room",
+			isExpectedError: true,
+			expectedError:   ErrHubIsNil,
 		},
 	}
 
@@ -518,14 +537,14 @@ func TestClient_JoinRoom(t *testing.T) {
 			client := tt.setupClient()
 			err := client.JoinRoom(tt.room)
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 				if mockHub, ok := client.Hub.(*MockHub); ok {
 					mockHub.AssertExpectations(t)
 				}
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
@@ -533,30 +552,32 @@ func TestClient_JoinRoom(t *testing.T) {
 
 func TestClient_LeaveRoom(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupClient   func() *Client
-		room          string
-		expectedError string
+		name            string
+		setupClient     func() *Client
+		room            string
+		isExpectedError bool
+		expectedError   error
 	}{
 		{
 			name: "leaves room successfully",
 			setupClient: func() *Client {
 				mockHub := NewMockHub()
 				mockHub.On("LeaveRoom", mock.AnythingOfType("*gosocket.Client"), "test-room")
-				client := NewClient("test", &MockWebSocketConn{}, nil)
+				client := NewClient("test", &MockWebSocketConn{}, nil, 256)
 				client.Hub = mockHub // Type assertion bypass for testing
 				return client
 			},
-			room:          "test-room",
-			expectedError: "",
+			room:            "test-room",
+			isExpectedError: false,
 		},
 		{
 			name: "fails when hub is nil",
 			setupClient: func() *Client {
-				return NewClient("test", &MockWebSocketConn{}, nil)
+				return NewClient("test", &MockWebSocketConn{}, nil, 256)
 			},
-			room:          "test-room",
-			expectedError: "client hub is nil",
+			room:            "test-room",
+			isExpectedError: true,
+			expectedError:   ErrHubIsNil,
 		},
 	}
 
@@ -565,14 +586,14 @@ func TestClient_LeaveRoom(t *testing.T) {
 			client := tt.setupClient()
 			err := client.LeaveRoom(tt.room)
 
-			if tt.expectedError == "" {
+			if !tt.isExpectedError {
 				assert.NoError(t, err)
 				if mockHub, ok := client.Hub.(*MockHub); ok {
 					mockHub.AssertExpectations(t)
 				}
 			} else {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			}
 		})
 	}
@@ -587,15 +608,15 @@ func TestClient_GetRooms(t *testing.T) {
 		{
 			name: "returns empty slice when hub is nil",
 			setupClient: func() *Client {
-				return NewClient("test", &MockWebSocketConn{}, nil)
+				return NewClient("test", &MockWebSocketConn{}, nil, 256)
 			},
 			expected: []string{},
 		},
 		{
 			name: "returns rooms client is in",
 			setupClient: func() *Client {
-				hub := NewHub()
-				client := NewClient("test", &MockWebSocketConn{}, hub)
+				hub := NewHub(DefaultLoggerConfig())
+				client := NewClient("test", &MockWebSocketConn{}, hub, 256)
 
 				// Manually add client to rooms for testing
 				hub.mu.Lock()
@@ -634,7 +655,7 @@ func TestClient_Disconnect(t *testing.T) {
 				mockHub.On("RemoveClient", mock.AnythingOfType("*gosocket.Client"))
 				mockConn.On("Close").Return(nil)
 
-				client := NewClient("test", mockConn, nil)
+				client := NewClient("test", mockConn, nil, 256)
 				client.Hub = mockHub
 
 				return client, mockConn, mockHub
@@ -646,7 +667,7 @@ func TestClient_Disconnect(t *testing.T) {
 				mockConn := &MockWebSocketConn{}
 				mockConn.On("Close").Return(nil)
 
-				client := NewClient("test", mockConn, nil)
+				client := NewClient("test", mockConn, nil, 256)
 
 				return client, mockConn, nil
 			},
@@ -657,7 +678,7 @@ func TestClient_Disconnect(t *testing.T) {
 				mockHub := NewMockHub()
 				mockHub.On("RemoveClient", mock.AnythingOfType("*gosocket.Client"))
 
-				client := NewClient("test", nil, nil)
+				client := NewClient("test", nil, nil, 256)
 				client.Hub = mockHub
 
 				return client, nil, mockHub
@@ -684,7 +705,7 @@ func TestClient_Disconnect(t *testing.T) {
 }
 
 func TestClient_SetUserData(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub())
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 
 	client.SetUserData("username", "john_doe")
 	client.SetUserData("age", 30)
@@ -696,7 +717,7 @@ func TestClient_SetUserData(t *testing.T) {
 }
 
 func TestClient_GetUserData(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub())
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 
 	// Set some test data
 	client.UserData["username"] = "john_doe"
@@ -720,7 +741,7 @@ func TestClient_GetUserData(t *testing.T) {
 }
 
 func TestClient_ConcurrentAccess(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub())
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 
 	// Test concurrent access to UserData
 	var wg sync.WaitGroup
@@ -762,13 +783,13 @@ func TestClient_ConcurrentAccess(t *testing.T) {
 	select {
 	case <-done:
 		// Test completed successfully
-	case <-time.After(5 * time.Second):
+	case <-time.After(100 * time.Millisecond):
 		t.Fatal("Test timed out - possible deadlock")
 	}
 }
 
 func TestClient_MessageChannelCapacity(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub())
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 
 	// Verify channel capacity
 	assert.Equal(t, 256, cap(client.MessageChan))

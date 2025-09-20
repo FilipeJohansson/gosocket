@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025 Filipe Johansson
+
 package gosocket
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -13,7 +15,7 @@ import (
 func WithMaxConnections(max int) UniversalOption {
 	return func(h HasHandler) error {
 		if max <= 0 {
-			return fmt.Errorf("[WithMaxConnections] max connections must be greater than 0")
+			return ErrMaxConnectionsLessThanOne
 		}
 
 		h.Handler().config.MaxConnections = max
@@ -26,7 +28,7 @@ func WithMaxConnections(max int) UniversalOption {
 func WithMessageSize(size int64) UniversalOption {
 	return func(h HasHandler) error {
 		if size <= 0 {
-			return fmt.Errorf("[WithMessageSize] message size must be greater than 0")
+			return ErrMessageSizeLessThanOne
 		}
 
 		h.Handler().config.MessageSize = size
@@ -41,7 +43,7 @@ func WithMessageSize(size int64) UniversalOption {
 func WithTimeout(read, write time.Duration) UniversalOption {
 	return func(h HasHandler) error {
 		if read <= 0 || write <= 0 {
-			return fmt.Errorf("[WithTimeout] read and write timeouts must be greater than 0")
+			return ErrTimeoutsLessThanOne
 		}
 
 		h.Handler().config.ReadTimeout = read
@@ -59,11 +61,11 @@ func WithTimeout(read, write time.Duration) UniversalOption {
 func WithPingPong(pingPeriod, pongWait time.Duration) UniversalOption {
 	return func(h HasHandler) error {
 		if pingPeriod <= 0 || pongWait <= 0 {
-			return fmt.Errorf("[WithPingPong] ping and pong wait periods must be greater than 0")
+			return ErrPingPongLessThanOne
 		}
 
 		if pingPeriod > pongWait {
-			return fmt.Errorf("[WithPingPong] pong wait must be greater than ping period")
+			return ErrPongWaitLessThanPing
 		}
 
 		h.Handler().config.PingPeriod = pingPeriod
@@ -117,7 +119,7 @@ func WithSerializer(encoding EncodingType, serializer Serializer) UniversalOptio
 // incoming messages for the JSON encoding type. The default JSON serializer
 // will be used if no other serializer is specified.
 func WithJSONSerializer() UniversalOption {
-	return WithSerializer(JSON, JSONSerializer{})
+	return WithSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig()))
 }
 
 // WithProtobufSerializer sets the default Protobuf serializer for a handler. The
@@ -125,7 +127,7 @@ func WithJSONSerializer() UniversalOption {
 // incoming messages for the Protobuf encoding type. The default Protobuf
 // serializer will be used if no other serializer is specified.
 func WithProtobufSerializer() UniversalOption {
-	return WithSerializer(Protobuf, ProtobufSerializer{})
+	return WithSerializer(Protobuf, CreateSerializer(Protobuf, DefaultSerializerConfig()))
 }
 
 // WithRawSerializer sets the default Raw serializer for a handler. The
@@ -133,7 +135,7 @@ func WithProtobufSerializer() UniversalOption {
 // incoming messages for the Raw encoding type. The default Raw serializer
 // will be used if no other serializer is specified.
 func WithRawSerializer() UniversalOption {
-	return WithSerializer(Raw, RawSerializer{})
+	return WithSerializer(Raw, CreateSerializer(Raw, DefaultSerializerConfig()))
 }
 
 // WithMiddleware adds a middleware to the handler. The middleware will be
@@ -181,7 +183,148 @@ func WithAuth(authFunc AuthFunc) UniversalOption {
 	}
 }
 
+func WithMaxDepth(depth int) UniversalOption {
+	return func(h HasHandler) error {
+		if depth < 1 {
+			return ErrDepthLessThanOne
+		}
+
+		handler := h.Handler()
+		handler.config.Serialization.MaxDepth = depth
+
+		for encoding, serializer := range handler.serializers {
+			serializer.Configure(handler.config.Serialization)
+			handler.serializers[encoding] = serializer
+		}
+
+		return nil
+	}
+}
+
+func WithMaxKeys(keys int) UniversalOption {
+	return func(h HasHandler) error {
+		if keys < 1 {
+			return ErrMaxKeyLengthLessThanOne
+		}
+
+		handler := h.Handler()
+		handler.config.Serialization.MaxKeys = keys
+
+		for encoding, serializer := range handler.serializers {
+			serializer.Configure(handler.config.Serialization)
+			handler.serializers[encoding] = serializer
+		}
+
+		return nil
+	}
+}
+
+func WithMaxElements(elements int) UniversalOption {
+	return func(h HasHandler) error {
+		if elements < 1 {
+			return ErrMaxElementsLessThanOne
+		}
+
+		handler := h.Handler()
+		handler.config.Serialization.MaxElements = elements
+
+		for encoding, serializer := range handler.serializers {
+			serializer.Configure(handler.config.Serialization)
+			handler.serializers[encoding] = serializer
+		}
+
+		return nil
+	}
+}
+
+func WithDisallowedTypes(types []string) UniversalOption {
+	return func(h HasHandler) error {
+		handler := h.Handler()
+		handler.config.Serialization.DisallowedTypes = types
+
+		for encoding, serializer := range handler.serializers {
+			serializer.Configure(handler.config.Serialization)
+			handler.serializers[encoding] = serializer
+		}
+
+		return nil
+	}
+}
+
+func WithStrictSerialization(enabled bool) UniversalOption {
+	return func(h HasHandler) error {
+		handler := h.Handler()
+		handler.config.Serialization.EnableStrict = enabled
+
+		for encoding, serializer := range handler.serializers {
+			serializer.Configure(handler.config.Serialization)
+			handler.serializers[encoding] = serializer
+		}
+
+		return nil
+	}
+}
+
+func WithMaxBinarySize(size int64) UniversalOption {
+	return func(h HasHandler) error {
+		if size <= 0 {
+			return ErrMaxBinarySizeLessThanOne
+		}
+
+		handler := h.Handler()
+		handler.config.Serialization.MaxBinarySize = size
+
+		for encoding, serializer := range handler.serializers {
+			serializer.Configure(handler.config.Serialization)
+			handler.serializers[encoding] = serializer
+		}
+
+		return nil
+	}
+}
+
+func WithRelevantHeaders(headers []string) UniversalOption {
+	return func(h HasHandler) error {
+		handler := h.Handler()
+		handler.config.RelevantHeaders = headers
+		return nil
+	}
+}
+
+func WithMessageBufferSize(size int) UniversalOption {
+	return func(h HasHandler) error {
+		handler := h.Handler()
+		handler.config.MessageChanBufSize = size
+		return nil
+	}
+}
+
+func WithRateLimit(config RateLimiterConfig) UniversalOption {
+	return func(h HasHandler) error {
+		handler := h.Handler()
+		handler.rateLimiter = NewRateLimiterManager(config)
+		return nil
+	}
+}
+
+func WithLogger(logger Logger, levels map[LogType]LogLevel) UniversalOption {
+	return func(h HasHandler) error {
+		h.Handler().logger = &LoggerConfig{
+			Logger: logger,
+			Level:  levels,
+		}
+		return nil
+	}
+}
+
 // ===== EVENTS HANDLERS =====
+
+func OnBeforeConnect(handler OnBeforeConnectFunc) UniversalOption {
+	return func(h HasHandler) error {
+		h.Handler().events.OnBeforeConnect = handler
+		return nil
+	}
+}
 
 // OnConnect sets a handler for the OnConnect event. The OnConnect event is
 // called when a new client connects to the handler. The handler is called with

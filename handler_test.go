@@ -19,7 +19,7 @@ func MockAuthSuccess(r *http.Request) (map[string]interface{}, error) {
 }
 
 func MockAuthFailure(r *http.Request) (map[string]interface{}, error) {
-	return nil, errors.New("authentication failed")
+	return nil, ErrAuthFailure
 }
 
 func MockMiddleware1(next http.Handler) http.Handler {
@@ -81,7 +81,7 @@ func TestHandler_MaxConnections(t *testing.T) {
 			handler, err := NewHandler(WithMaxConnections(tt.input))
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "[WithMaxConnections] max connections must be greater than 0")
+				assert.Contains(t, err.Error(), ErrMaxConnectionsLessThanOne.Error())
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.expected, handler.config.MaxConnections)
@@ -119,7 +119,7 @@ func TestHandler_MessageSize(t *testing.T) {
 			handler, err := NewHandler(WithMessageSize(tt.input))
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "[WithMessageSize] message size must be greater than 0")
+				assert.Contains(t, err.Error(), ErrMessageSizeLessThanOne.Error())
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.expected, handler.config.MessageSize)
@@ -157,7 +157,7 @@ func TestHandler_Timeout(t *testing.T) {
 			handler, err := NewHandler(WithTimeout(tt.read, tt.write))
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "[WithTimeout] read and write timeouts must be greater than 0")
+				assert.Contains(t, err.Error(), ErrTimeoutsLessThanOne.Error())
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.expectedRead, handler.config.ReadTimeout)
@@ -173,7 +173,7 @@ func TestHandler_PingPong(t *testing.T) {
 		pingPeriod         time.Duration
 		pongWait           time.Duration
 		expectError        bool
-		expectErrorMsg     string
+		expectedError      error
 		expectedPingPeriod time.Duration
 		expectedPongWait   time.Duration
 	}{
@@ -185,18 +185,18 @@ func TestHandler_PingPong(t *testing.T) {
 			expectedPongWait:   35 * time.Second,
 		},
 		{
-			name:           "handles ping period greater than pong wait",
-			pingPeriod:     5 * time.Second,
-			pongWait:       1 * time.Second,
-			expectError:    true,
-			expectErrorMsg: "[WithPingPong] pong wait must be greater than ping period",
+			name:          "handles ping period greater than pong wait",
+			pingPeriod:    5 * time.Second,
+			pongWait:      1 * time.Second,
+			expectError:   true,
+			expectedError: ErrPongWaitLessThanPing,
 		},
 		{
-			name:           "handles negative ping pong settings",
-			pingPeriod:     -10 * time.Second,
-			pongWait:       -5 * time.Second,
-			expectError:    true,
-			expectErrorMsg: "[WithPingPong] ping and pong wait periods must be greater than 0",
+			name:          "handles negative ping pong settings",
+			pingPeriod:    -10 * time.Second,
+			pongWait:      -5 * time.Second,
+			expectError:   true,
+			expectedError: ErrPingPongLessThanOne,
 		},
 	}
 
@@ -205,7 +205,7 @@ func TestHandler_PingPong(t *testing.T) {
 			handler, err := NewHandler(WithPingPong(tt.pingPeriod, tt.pongWait))
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectErrorMsg)
+				assert.Contains(t, err.Error(), tt.expectedError.Error())
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.expectedPingPeriod, handler.config.PingPeriod)
@@ -242,27 +242,27 @@ func TestHandler_Serializers(t *testing.T) {
 	}{
 		{
 			name:       "WithSerializer",
-			setup:      WithSerializer(JSON, JSONSerializer{}),
+			setup:      WithSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig())),
 			serializer: JSON,
-			wantType:   JSONSerializer{},
+			wantType:   &JSONSerializer{},
 		},
 		{
 			name:       "WithJSONSerializer",
 			setup:      WithJSONSerializer(),
 			serializer: JSON,
-			wantType:   JSONSerializer{},
+			wantType:   &JSONSerializer{},
 		},
 		{
 			name:       "WithProtobufSerializer",
 			setup:      WithProtobufSerializer(),
 			serializer: Protobuf,
-			wantType:   ProtobufSerializer{},
+			wantType:   &ProtobufSerializer{},
 		},
 		{
 			name:       "WithRawSerializer",
 			setup:      WithRawSerializer(),
 			serializer: Raw,
-			wantType:   RawSerializer{},
+			wantType:   &RawSerializer{},
 		},
 	}
 
@@ -332,35 +332,35 @@ func TestHandler_EventHandlers(t *testing.T) {
 	)
 
 	handler, err := NewHandler(
-		OnConnect(func(c *Client, ctx *HandlerContext) error {
+		OnConnect(func(c *Client, ctx *Context) error {
 			connectCalled = true
 			return nil
 		}),
-		OnDisconnect(func(c *Client, ctx *HandlerContext) error {
+		OnDisconnect(func(c *Client, ctx *Context) error {
 			disconnectCalled = true
 			return nil
 		}),
-		OnMessage(func(c *Client, m *Message, ctx *HandlerContext) error {
+		OnMessage(func(c *Client, m *Message, ctx *Context) error {
 			messageCalled = true
 			return nil
 		}),
-		OnRawMessage(func(c *Client, data []byte, ctx *HandlerContext) error {
+		OnRawMessage(func(c *Client, data []byte, ctx *Context) error {
 			rawMessageCalled = true
 			return nil
 		}),
-		OnJSONMessage(func(c *Client, data interface{}, ctx *HandlerContext) error {
+		OnJSONMessage(func(c *Client, data interface{}, ctx *Context) error {
 			jsonMessageCalled = true
 			return nil
 		}),
-		OnError(func(c *Client, err error, ctx *HandlerContext) error {
+		OnError(func(c *Client, err error, ctx *Context) error {
 			errorCalled = true
 			return nil
 		}),
-		OnPing(func(c *Client, ctx *HandlerContext) error {
+		OnPing(func(c *Client, ctx *Context) error {
 			pingCalled = true
 			return nil
 		}),
-		OnPong(func(c *Client, ctx *HandlerContext) error {
+		OnPong(func(c *Client, ctx *Context) error {
 			pongCalled = true
 			return nil
 		}),
@@ -380,7 +380,7 @@ func TestHandler_EventHandlers(t *testing.T) {
 	assert.NotNil(t, handler.events.OnPong)
 
 	// test that handlers can be called
-	client := NewClient("test", &MockWebSocketConn{}, NewHub())
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), handler.config.MessageChanBufSize)
 	message := NewMessage(TextMessage, "test")
 	ctx := NewHandlerContext(handler)
 
@@ -416,7 +416,7 @@ func TestHandler_ProcessMessage(t *testing.T) {
 		{
 			name: "processes message with OnMessage handler",
 			setupHandlers: []UniversalOption{
-				OnMessage(func(c *Client, m *Message, ctx *HandlerContext) error {
+				OnMessage(func(c *Client, m *Message, ctx *Context) error {
 					return nil
 				}),
 			},
@@ -426,7 +426,7 @@ func TestHandler_ProcessMessage(t *testing.T) {
 		{
 			name: "processes message with OnRawMessage handler",
 			setupHandlers: []UniversalOption{
-				OnRawMessage(func(c *Client, data []byte, ctx *HandlerContext) error {
+				OnRawMessage(func(c *Client, data []byte, ctx *Context) error {
 					return nil
 				}),
 			},
@@ -436,7 +436,7 @@ func TestHandler_ProcessMessage(t *testing.T) {
 		{
 			name: "processes JSON message with OnJSONMessage handler",
 			setupHandlers: []UniversalOption{
-				OnJSONMessage(func(c *Client, data interface{}, ctx *HandlerContext) error {
+				OnJSONMessage(func(c *Client, data interface{}, ctx *Context) error {
 					return nil
 				}),
 			},
@@ -446,10 +446,10 @@ func TestHandler_ProcessMessage(t *testing.T) {
 		{
 			name: "handles error in OnMessage handler",
 			setupHandlers: []UniversalOption{
-				OnMessage(func(c *Client, m *Message, ctx *HandlerContext) error {
+				OnMessage(func(c *Client, m *Message, ctx *Context) error {
 					return errors.New("handler error")
 				}),
-				OnError(func(c *Client, err error, ctx *HandlerContext) error {
+				OnError(func(c *Client, err error, ctx *Context) error {
 					assert.Contains(t, err.Error(), "handler error")
 					return nil
 				}),
@@ -461,7 +461,7 @@ func TestHandler_ProcessMessage(t *testing.T) {
 		{
 			name: "handles invalid JSON gracefully",
 			setupHandlers: []UniversalOption{
-				OnJSONMessage(func(c *Client, data interface{}, ctx *HandlerContext) error {
+				OnJSONMessage(func(c *Client, data interface{}, ctx *Context) error {
 					t.Fatal("OnJSONMessage should not be called with invalid JSON")
 					return nil
 				}),
@@ -481,7 +481,7 @@ func TestHandler_ProcessMessage(t *testing.T) {
 				_ = setup(handler)
 			}
 
-			client := NewClient("test", &MockWebSocketConn{}, NewHub())
+			client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), handler.config.MessageChanBufSize)
 			handler.processMessage(client, tt.message)
 
 			// process is asynchronous, so we might need a small delay
@@ -502,8 +502,8 @@ func TestHandler_EnsureHubRunning(t *testing.T) {
 	handler.hub = mockHub
 
 	// call ensureHubRunning twice
-	handler.ensureHubRunning()
-	handler.ensureHubRunning()
+	handler.ensureHubRunning(t.Context())
+	handler.ensureHubRunning(t.Context())
 
 	// wait a moment for goroutine to start
 	time.Sleep(10 * time.Millisecond)
@@ -669,7 +669,7 @@ func TestHandler_DefaultConfig(t *testing.T) {
 	config := DefaultHandlerConfig()
 
 	assert.Equal(t, 1000, config.MaxConnections)
-	assert.Equal(t, int64(512), config.MessageSize)
+	assert.Equal(t, int64(512*1024), config.MessageSize)
 	assert.Equal(t, 60*time.Second, config.ReadTimeout)
 	assert.Equal(t, 10*time.Second, config.WriteTimeout)
 	assert.Equal(t, 54*time.Second, config.PingPeriod)
@@ -688,8 +688,8 @@ func TestHandler_ChainedConfiguration(t *testing.T) {
 		WithEncoding(JSON),
 		WithJSONSerializer(),
 		WithAuth(MockAuthSuccess),
-		OnConnect(func(c *Client, ctx *HandlerContext) error { return nil }),
-		OnDisconnect(func(c *Client, ctx *HandlerContext) error { return nil }),
+		OnConnect(func(c *Client, ctx *Context) error { return nil }),
+		OnDisconnect(func(c *Client, ctx *Context) error { return nil }),
 	)
 
 	if err != nil {

@@ -2,7 +2,10 @@ module github.com/FilipeJohansson/gosocket
 
 go 1.24.3
 
-require github.com/gorilla/websocket v1.5.3
+require (
+	github.com/gorilla/websocket v1.5.3
+	golang.org/x/time v0.13.0
+)
 
 require (
 	github.com/bytedance/sonic v1.11.6 // indirect
