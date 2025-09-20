@@ -86,12 +86,12 @@ type Client struct {
 //
 // The created Client instance will also have a map to store user custom data.
 // The map will be empty initially.
-func NewClient(id string, conn IWebSocketConn, hub IHub) *Client {
+func NewClient(id string, conn IWebSocketConn, hub IHub, messageChanBufSize int) *Client {
 	return &Client{
 		ID:          id,
 		Conn:        conn,
 		Hub:         hub,
-		MessageChan: make(chan []byte, 256), // TODO: make configurable
+		MessageChan: make(chan []byte, messageChanBufSize),
 		UserData:    make(map[string]interface{}),
 		ConnInfo:    nil, // will be defined at HandleWebSocket
 	}

@@ -19,15 +19,16 @@ type SerializationConfig struct {
 }
 
 type HandlerConfig struct {
-	MaxConnections  int
-	MessageSize     int64
-	ReadTimeout     time.Duration
-	WriteTimeout    time.Duration
-	PingPeriod      time.Duration
-	PongWait        time.Duration
-	AllowedOrigins  []string
-	DefaultEncoding EncodingType // default message encoding
-	Serialization   SerializationConfig
+	MaxConnections     int
+	MessageSize        int64
+	ReadTimeout        time.Duration
+	WriteTimeout       time.Duration
+	PingPeriod         time.Duration
+	PongWait           time.Duration
+	AllowedOrigins     []string
+	DefaultEncoding    EncodingType // default message encoding
+	Serialization      SerializationConfig
+	MessageChanBufSize int
 }
 
 type ServerConfig struct {
@@ -53,14 +54,15 @@ func DefaultServerConfig() *ServerConfig {
 
 func DefaultHandlerConfig() *HandlerConfig {
 	return &HandlerConfig{
-		MaxConnections:  1000,
-		MessageSize:     512 * 1024,
-		ReadTimeout:     60 * time.Second,
-		WriteTimeout:    10 * time.Second,
-		PingPeriod:      54 * time.Second,
-		PongWait:        60 * time.Second,
-		DefaultEncoding: JSON,
-		Serialization:   DefaultSerializerConfig(),
+		MaxConnections:     1000,
+		MessageSize:        512 * 1024,
+		ReadTimeout:        60 * time.Second,
+		WriteTimeout:       10 * time.Second,
+		PingPeriod:         54 * time.Second,
+		PongWait:           60 * time.Second,
+		DefaultEncoding:    JSON,
+		Serialization:      DefaultSerializerConfig(),
+		MessageChanBufSize: 256,
 	}
 }
 

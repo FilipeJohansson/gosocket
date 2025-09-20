@@ -228,8 +228,7 @@ func TestConcurrentClients(t *testing.T) {
 	}
 }
 
-// TODO: uncomment this test once MessageChan buffer size is configurable
-/* func TestConcurrentBroadcast(t *testing.T) {
+func TestConcurrentBroadcast(t *testing.T) {
 	const clientsCount = 10
 	const messagesPerClient = 100
 
@@ -238,6 +237,7 @@ func TestConcurrentClients(t *testing.T) {
 
 	server, err := NewServer(
 		WithPath("/ws"),
+		WithMessageBufferSize(1024),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
 			c.Hub.BroadcastMessage(m)
 			return nil
@@ -292,7 +292,7 @@ func TestConcurrentClients(t *testing.T) {
 		key := fmt.Sprintf("client-%d", i)
 		require.Len(t, received[key], expected)
 	}
-} */
+}
 
 func TestUnexpectedDisconnect(t *testing.T) {
 	const clientsCount = 5

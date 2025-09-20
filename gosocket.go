@@ -280,6 +280,14 @@ func WithMaxBinarySize(size int64) UniversalOption {
 	}
 }
 
+func WithMessageBufferSize(size int) UniversalOption {
+	return func(h HasHandler) error {
+		handler := h.Handler()
+		handler.config.MessageChanBufSize = size
+		return nil
+	}
+}
+
 // ===== EVENTS HANDLERS =====
 
 // OnConnect sets a handler for the OnConnect event. The OnConnect event is

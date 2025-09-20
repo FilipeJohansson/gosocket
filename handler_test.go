@@ -380,7 +380,7 @@ func TestHandler_EventHandlers(t *testing.T) {
 	assert.NotNil(t, handler.events.OnPong)
 
 	// test that handlers can be called
-	client := NewClient("test", &MockWebSocketConn{}, NewHub())
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(), handler.config.MessageChanBufSize)
 	message := NewMessage(TextMessage, "test")
 	ctx := NewHandlerContext(handler)
 
@@ -481,7 +481,7 @@ func TestHandler_ProcessMessage(t *testing.T) {
 				_ = setup(handler)
 			}
 
-			client := NewClient("test", &MockWebSocketConn{}, NewHub())
+			client := NewClient("test", &MockWebSocketConn{}, NewHub(), handler.config.MessageChanBufSize)
 			handler.processMessage(client, tt.message)
 
 			// process is asynchronous, so we might need a small delay

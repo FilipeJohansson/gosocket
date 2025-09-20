@@ -214,7 +214,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clientId := GenerateClientID()
-	client := NewClient(clientId, conn, h.hub)
+	client := NewClient(clientId, conn, h.hub, h.config.MessageChanBufSize)
 	client.ConnInfo = handlerCtx.connInfo
 
 	for key, value := range userData {
