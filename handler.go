@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type OnBeforeConnectFunc func(r *http.Request, ctx *Context) error
 type OnConnectFunc func(c *Client, ctx *Context) error
 type OnDisconnectFunc func(c *Client, ctx *Context) error
 type OnMessageFunc func(c *Client, m *Message, ctx *Context) error            // generic handler
@@ -30,6 +31,7 @@ type OnPingFunc func(c *Client, ctx *Context) error
 type OnPongFunc func(c *Client, ctx *Context) error
 
 type Events struct {
+	OnBeforeConnect   OnBeforeConnectFunc
 	OnConnect         OnConnectFunc
 	OnDisconnect      OnDisconnectFunc
 	OnMessage         OnMessageFunc
@@ -214,6 +216,13 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if !h.rateLimiter.AllowIP(r.RemoteAddr) {
 		http.Error(w, ErrTooManyRequests.Error(), http.StatusTooManyRequests)
 		return
+	}
+
+	if h.events.OnBeforeConnect != nil {
+		if err := h.events.OnBeforeConnect(r, handlerCtx); err != nil {
+			http.Error(w, fmt.Sprintf("connection rejected: %v", err), http.StatusBadRequest)
+			return
+		}
 	}
 
 	conn, err := h.upgrader.Upgrade(w, r, nil)

@@ -306,6 +306,13 @@ func WithRateLimit(config RateLimiterConfig) UniversalOption {
 
 // ===== EVENTS HANDLERS =====
 
+func OnBeforeConnect(handler OnBeforeConnectFunc) UniversalOption {
+	return func(h HasHandler) error {
+		h.Handler().events.OnBeforeConnect = handler
+		return nil
+	}
+}
+
 // OnConnect sets a handler for the OnConnect event. The OnConnect event is
 // called when a new client connects to the handler. The handler is called with
 // the client that connected and a context object as arguments. The context
