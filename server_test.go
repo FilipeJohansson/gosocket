@@ -1,10 +1,13 @@
 package gosocket
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -813,7 +816,7 @@ func TestServer_BroadcastJSON(t *testing.T) {
 		{
 			name: "broadcasts JSON successfully",
 			setupServer: func() *Server {
-				server, err := NewServer()
+				server, err := NewServer(WithJSONSerializer())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -828,7 +831,7 @@ func TestServer_BroadcastJSON(t *testing.T) {
 		{
 			name: "fails with invalid JSON data",
 			setupServer: func() *Server {
-				server, err := NewServer()
+				server, err := NewServer(WithJSONSerializer())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1643,6 +1646,929 @@ func TestServer_BroadcastDataWithEncoding(t *testing.T) {
 			} else {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectedError.Error())
+			}
+		})
+	}
+}
+
+func TestServer_ValidateValue(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupServer func() *Server
+		value       interface{}
+		expectError bool
+		expectedErr string
+	}{
+		{
+			name: "validates simple string within limits",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value:       "hello world",
+			expectError: false,
+		},
+		{
+			name: "validates map within limits",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+					WithMaxKeys(3),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value: map[string]string{
+				"key1": "value1",
+				"key2": "value2",
+			},
+			expectError: false,
+		},
+		{
+			name: "fails when map exceeds max keys",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+					WithMaxKeys(2),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value: map[string]string{
+				"key1": "value1",
+				"key2": "value2",
+				"key3": "value3",
+			},
+			expectError: true,
+			expectedErr: "key length",
+		},
+		{
+			name: "validates slice within limits",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+					WithMaxElements(5),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value:       []string{"item1", "item2", "item3"},
+			expectError: false,
+		},
+		{
+			name: "fails when slice exceeds max elements",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+					WithMaxElements(2),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value:       []string{"item1", "item2", "item3"},
+			expectError: true,
+			expectedErr: "elements",
+		},
+		{
+			name: "fails when depth exceeded",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(1),
+					WithMaxKeys(10),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value: map[string]interface{}{
+				"level1": map[string]string{
+					"level2": "deep value",
+				},
+			},
+			expectError: true,
+			expectedErr: "depth",
+		},
+		{
+			name: "validates array within limits",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+					WithMaxElements(5),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value:       [3]int{1, 2, 3},
+			expectError: false,
+		},
+		{
+			name: "validates nil pointer",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value:       (*string)(nil),
+			expectError: false,
+		},
+		{
+			name: "validates struct with fields",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value: struct {
+				Name string
+				Age  int
+			}{
+				Name: "test",
+				Age:  25,
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := tt.setupServer()
+			mockHub := NewMockHub()
+
+			if !tt.expectError {
+				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
+			}
+
+			server.handler.SetHub(mockHub)
+
+			err := server.BroadcastData(tt.value)
+
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.expectedErr != "" {
+					assert.Contains(t, strings.ToLower(err.Error()), strings.ToLower(tt.expectedErr))
+				}
+			} else {
+				assert.NoError(t, err)
+				mockHub.AssertExpectations(t)
+			}
+		})
+	}
+}
+
+func TestServer_ValidateType(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupServer func() *Server
+		value       interface{}
+		expectError bool
+		expectedErr string
+	}{
+		{
+			name: "allows basic types",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value:       "string",
+			expectError: false,
+		},
+		{
+			name: "rejects function type",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value:       func() {},
+			expectError: true,
+			expectedErr: "not allowed",
+		},
+		{
+			name: "rejects channel type",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value:       make(chan int),
+			expectError: true,
+			expectedErr: "not allowed",
+		},
+		{
+			name: "rejects unsafe pointer type",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value:       unsafe.Pointer(&struct{}{}),
+			expectError: true,
+			expectedErr: "not allowed",
+		},
+		{
+			name: "allows pointer to valid type",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value: func() interface{} {
+				s := "test"
+				return &s
+			}(),
+			expectError: false,
+		},
+		{
+			name: "validates nested pointer types",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value: func() interface{} {
+				s := "test"
+				p := &s
+				return &p
+			}(),
+			expectError: false,
+		},
+		{
+			name: "rejects disallowed custom types",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+					WithDisallowedTypes([]string{"chan"}),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value:       make(chan int),
+			expectError: true,
+			expectedErr: "not allowed",
+		},
+		{
+			name: "fails when type depth exceeded",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(1),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			value:       [][]string{{"nested"}},
+			expectError: true,
+			expectedErr: "depth",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := tt.setupServer()
+			mockHub := NewMockHub()
+
+			if !tt.expectError {
+				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
+			}
+
+			server.handler.SetHub(mockHub)
+
+			err := server.BroadcastData(tt.value)
+
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.expectedErr != "" {
+					assert.Contains(t, strings.ToLower(err.Error()), strings.ToLower(tt.expectedErr))
+				}
+			} else {
+				assert.NoError(t, err)
+				mockHub.AssertExpectations(t)
+			}
+		})
+	}
+}
+
+func TestServer_JSONUnmarshal(t *testing.T) {
+	tests := []struct {
+		name            string
+		setupServer     func() *Server
+		jsonData        string
+		target          interface{}
+		isExpectedError bool
+		expectedError   string
+		validateResult  func(interface{}) bool
+	}{
+		{
+			name: "unmarshals valid JSON object",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+					WithMaxKeys(10),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			jsonData: `{"name": "test", "age": 25}`,
+			target:   &map[string]interface{}{},
+			validateResult: func(result interface{}) bool {
+				data := result.(*map[string]interface{})
+				return (*data)["name"] == "test" && (*data)["age"].(json.Number).String() == "25"
+			},
+			isExpectedError: false,
+		},
+		{
+			name: "unmarshals valid JSON array",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+					WithMaxElements(5),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			jsonData: `["item1", "item2", "item3"]`,
+			target:   &[]string{},
+			validateResult: func(result interface{}) bool {
+				data := result.(*[]string)
+				return len(*data) == 3 && (*data)[0] == "item1"
+			},
+			isExpectedError: false,
+		},
+		{
+			name: "fails with empty data",
+			setupServer: func() *Server {
+				server, err := NewServer(WithJSONSerializer())
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			jsonData:        "",
+			target:          &map[string]interface{}{},
+			isExpectedError: true,
+			expectedError:   "empty data",
+		},
+		{
+			name: "fails with data exceeding max binary size",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxBinarySize(10),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			jsonData:        `{"very_long_key_name": "very long value that exceeds the limit"}`,
+			target:          &map[string]interface{}{},
+			isExpectedError: true,
+			expectedError:   "data too long",
+		},
+		{
+			name: "fails with invalid JSON",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			jsonData:        `{"name": "test", "age": }`,
+			target:          &map[string]interface{}{},
+			isExpectedError: true,
+			expectedError:   "invalid json",
+		},
+		{
+			name: "fails with unsupported target type",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			jsonData:        `{"name": "test"}`,
+			target:          func() {},
+			isExpectedError: true,
+			expectedError:   "not allowed",
+		},
+		{
+			name: "validates data structure limits",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(5),
+					WithMaxKeys(2),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			jsonData:        `{"key1": "val1", "key2": "val2", "key3": "val3"}`,
+			target:          &map[string]interface{}{},
+			isExpectedError: true,
+			expectedError:   "invalid struct",
+		},
+		{
+			name: "works with strict mode enabled",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithStrictSerialization(true),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			jsonData: `{"name": "test", "age": 25}`,
+			target: &struct {
+				Name string `json:"name"`
+				Age  int    `json:"age"`
+			}{},
+			validateResult: func(result interface{}) bool {
+				data := result.(*struct {
+					Name string `json:"name"`
+					Age  int    `json:"age"`
+				})
+				return data.Name == "test" && data.Age == 25
+			},
+			isExpectedError: false,
+		},
+		{
+			name: "fails in strict mode with unknown fields",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithStrictSerialization(true),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			jsonData: `{"name": "test", "unknown_field": "value"}`,
+			target: &struct {
+				Name string `json:"name"`
+			}{},
+			isExpectedError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := tt.setupServer()
+
+			// Get the JSON serializer from the server
+			serializers := server.handler.Serializers()
+			jsonSerializer, exists := serializers[JSON]
+			assert.True(t, exists)
+
+			err := jsonSerializer.Unmarshal([]byte(tt.jsonData), tt.target)
+
+			if tt.isExpectedError {
+				assert.Error(t, err)
+				if tt.expectedError != "" {
+					assert.Contains(t, strings.ToLower(err.Error()), strings.ToLower(tt.expectedError))
+				}
+			} else {
+				assert.NoError(t, err)
+				if tt.validateResult != nil {
+					assert.True(t, tt.validateResult(tt.target))
+				}
+			}
+		})
+	}
+}
+
+func TestServer_RawMarshal(t *testing.T) {
+	tests := []struct {
+		name            string
+		setupServer     func() *Server
+		data            interface{}
+		isExpectedError bool
+		expectedError   string
+		expectedResult  []byte
+	}{
+		{
+			name: "marshals byte slice successfully",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithRawSerializer(),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			data:            []byte("hello world"),
+			isExpectedError: false,
+			expectedResult:  []byte("hello world"),
+		},
+		{
+			name: "fails with non-byte-slice data",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithRawSerializer(),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			data:            "string data",
+			isExpectedError: true,
+			expectedError:   ErrRawSerializer.Error(),
+		},
+		{
+			name: "fails when data exceeds max binary size",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithRawSerializer(),
+					WithMaxBinarySize(5),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			data:            []byte("hello world"),
+			isExpectedError: true,
+			expectedError:   "data too long",
+		},
+		{
+			name: "marshals empty byte slice",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithRawSerializer(),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			data:            []byte{},
+			isExpectedError: false,
+			expectedResult:  []byte{},
+		},
+		{
+			name: "marshals binary data",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithRawSerializer(),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			data:            []byte{0x00, 0x01, 0x02, 0xFF},
+			isExpectedError: false,
+			expectedResult:  []byte{0x00, 0x01, 0x02, 0xFF},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := tt.setupServer()
+
+			// Get the Raw serializer from the server
+			serializers := server.handler.Serializers()
+			rawSerializer, exists := serializers[Raw]
+			assert.True(t, exists)
+
+			result, err := rawSerializer.Marshal(tt.data)
+
+			if tt.isExpectedError {
+				assert.Error(t, err)
+				if tt.expectedError != "" {
+					assert.Contains(t, err.Error(), tt.expectedError)
+				}
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedResult, result)
+			}
+		})
+	}
+}
+
+func TestServer_RawUnmarshal(t *testing.T) {
+	tests := []struct {
+		name            string
+		setupServer     func() *Server
+		data            []byte
+		target          interface{}
+		isExpectedError bool
+		expectedError   string
+		validateResult  func(interface{}) bool
+	}{
+		{
+			name: "unmarshals to byte slice pointer successfully",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithRawSerializer(),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			data:   []byte("hello world"),
+			target: &[]byte{},
+			validateResult: func(result interface{}) bool {
+				data := result.(*[]byte)
+				return string(*data) == "hello world"
+			},
+			isExpectedError: false,
+		},
+		{
+			name: "fails when data exceeds max binary size",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithRawSerializer(),
+					WithMaxBinarySize(5),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			data:            []byte("hello world"),
+			target:          &[]byte{},
+			isExpectedError: true,
+			expectedError:   "data too long",
+		},
+		{
+			name: "fails with non-byte-slice-pointer target",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithRawSerializer(),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			data:            []byte("hello world"),
+			target:          &[]string{},
+			isExpectedError: true,
+			expectedError:   ErrRawSerializerPtr.Error(),
+		},
+		{
+			name: "unmarshals empty data",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithRawSerializer(),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			data:   []byte{},
+			target: &[]byte{},
+			validateResult: func(result interface{}) bool {
+				data := result.(*[]byte)
+				return len(*data) == 0
+			},
+			isExpectedError: false,
+		},
+		{
+			name: "unmarshals binary data",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithRawSerializer(),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			data:   []byte{0x00, 0x01, 0x02, 0xFF},
+			target: &[]byte{},
+			validateResult: func(result interface{}) bool {
+				data := result.(*[]byte)
+				return len(*data) == 4 &&
+					(*data)[0] == 0x00 &&
+					(*data)[1] == 0x01 &&
+					(*data)[2] == 0x02 &&
+					(*data)[3] == 0xFF
+			},
+			isExpectedError: false,
+		},
+		{
+			name: "fails with non-pointer target",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithRawSerializer(),
+					WithMaxBinarySize(1024),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			data:            []byte("hello world"),
+			target:          []byte{},
+			isExpectedError: true,
+			expectedError:   ErrRawSerializerPtr.Error(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := tt.setupServer()
+
+			// Get the Raw serializer from the server
+			serializers := server.handler.Serializers()
+			rawSerializer, exists := serializers[Raw]
+			assert.True(t, exists)
+
+			err := rawSerializer.Unmarshal(tt.data, tt.target)
+
+			if tt.isExpectedError {
+				assert.Error(t, err)
+				if tt.expectedError != "" {
+					assert.Contains(t, err.Error(), tt.expectedError)
+				}
+			} else {
+				assert.NoError(t, err)
+				if tt.validateResult != nil {
+					assert.True(t, tt.validateResult(tt.target))
+				}
+			}
+		})
+	}
+}
+
+func TestServer_SerializationIntegration(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupServer func() *Server
+		operation   func(*Server) error
+		expectError bool
+		expectedErr string
+	}{
+		{
+			name: "broadcasts data with validation limits",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(2),
+					WithMaxKeys(3),
+					WithMaxElements(5),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				mockHub := NewMockHub()
+				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
+				server.handler.SetHub(mockHub)
+				return server
+			},
+			operation: func(s *Server) error {
+				return s.BroadcastData(map[string]interface{}{
+					"message": "hello",
+					"count":   42,
+				})
+			},
+			expectError: false,
+		},
+		{
+			name: "fails broadcast when validation limits exceeded",
+			setupServer: func() *Server {
+				server, err := NewServer(
+					WithJSONSerializer(),
+					WithMaxDepth(1),
+					WithMaxKeys(1),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return server
+			},
+			operation: func(s *Server) error {
+				return s.BroadcastData(map[string]interface{}{
+					"key1": "value1",
+					"key2": "value2", // Exceeds MaxKeys limit
+				})
+			},
+			expectError: true,
+			expectedErr: "key length",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := tt.setupServer()
+			err := tt.operation(server)
+
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.expectedErr != "" {
+					assert.Contains(t, strings.ToLower(err.Error()), strings.ToLower(tt.expectedErr))
+				}
+			} else {
+				assert.NoError(t, err)
+				if mockHub, ok := server.handler.Hub().(*MockHub); ok {
+					mockHub.AssertExpectations(t)
+				}
 			}
 		})
 	}

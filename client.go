@@ -91,7 +91,7 @@ func NewClient(id string, conn IWebSocketConn, hub IHub) *Client {
 		ID:          id,
 		Conn:        conn,
 		Hub:         hub,
-		MessageChan: make(chan []byte, 256),
+		MessageChan: make(chan []byte, 256), // TODO: make configurable
 		UserData:    make(map[string]interface{}),
 		ConnInfo:    nil, // will be defined at HandleWebSocket
 	}

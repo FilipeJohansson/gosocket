@@ -366,6 +366,7 @@ func (s *Server) BroadcastData(data interface{}) error {
 	serializer := s.handler.Serializers()[s.handler.Config().DefaultEncoding]
 	if serializer == nil {
 		// JSON fallback
+		s.handler.AddSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig()))
 		return s.BroadcastJSON(data)
 	}
 
@@ -401,7 +402,15 @@ func (s *Server) BroadcastDataWithEncoding(data interface{}, encoding EncodingTy
 // an error is returned. If the server is not properly initialized, this function
 // will return an error.
 func (s *Server) BroadcastJSON(data interface{}) error {
-	jsonData, err := json.Marshal(data)
+	if s.handler == nil || s.handler.Hub() == nil {
+		return ErrServerNotInitialized
+	}
+
+	if s.handler.serializers[JSON] == nil {
+		return newSerializerNotFoundError(JSON)
+	}
+
+	jsonData, err := s.handler.serializers[JSON].Marshal(data)
 	if err != nil {
 		return newSerializeError(err)
 	}
