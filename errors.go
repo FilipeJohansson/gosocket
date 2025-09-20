@@ -31,13 +31,16 @@ var (
 	ErrServerNotRunning     = errors.New("server is not running")
 	ErrServerNotInitialized = errors.New("server not properly initialized")
 	ErrServerStopped        = errors.New("server stopped with error")
+	ErrServerShutdown       = errors.New("server shutdown")
 
 	// Handler errors
-	ErrSetWriteDeadline = errors.New("failed to set write deadline")
-	ErrSetReadDeadline  = errors.New("failed to set read deadline")
-	ErrSendMessage      = errors.New("failed to send message")
-	ErrEventFailed      = errors.New("event failed")
-	ErrAuthFailure      = errors.New("authentication failed")
+	ErrSetWriteDeadline  = errors.New("failed to set write deadline")
+	ErrSetReadDeadline   = errors.New("failed to set read deadline")
+	ErrSendMessage       = errors.New("failed to send message")
+	ErrEventFailed       = errors.New("event failed")
+	ErrAuthFailure       = errors.New("authentication failed")
+	ErrTooManyRequests   = errors.New("too many requests")
+	ErrRateLimitExceeded = errors.New("rate limit exceeded")
 
 	// Hub errors
 	ErrHubIsNil      = errors.New("hub is nil")

@@ -4,9 +4,40 @@
 package gosocket
 
 import (
-	"net/http"
 	"time"
 )
+
+type RateLimiterConfig struct {
+	// PerClientRate is requests/msgs per second allowed per client.
+	PerClientRate float64
+	// PerClientBurst is burst size for client limiter.
+	PerClientBurst int
+
+	// PerIPRate is requests/msgs per second allowed per IP (handshake / connection attempts / overall).
+	PerIPRate float64
+	// PerIPBurst is burst size for IP limiter.
+	PerIPBurst int
+
+	// CleanupInterval controls how often internal stale entries are purged.
+	CleanupInterval time.Duration
+	// EntryTTL is how long an unused entry stays before eligible for cleanup.
+	EntryTTL time.Duration
+
+	// MaxRateLimitViolations is the maximum number of times a client can be rate limited before being disconnected.
+	MaxRateLimitViolations int
+}
+
+func DefaultRateLimiterConfig() RateLimiterConfig {
+	return RateLimiterConfig{
+		PerClientRate:          10, // 10 messages/s per client
+		PerClientBurst:         100,
+		PerIPRate:              20, // 20 reqs/s per IP (handshake/connection attempts)
+		PerIPBurst:             40,
+		CleanupInterval:        30 * time.Second,
+		EntryTTL:               5 * time.Minute,
+		MaxRateLimitViolations: 5,
+	}
+}
 
 type SerializationConfig struct {
 	MaxDepth        int
@@ -16,6 +47,18 @@ type SerializationConfig struct {
 	MaxBinarySize   int64
 	DisallowedTypes []string
 	EnableStrict    bool
+}
+
+func DefaultSerializerConfig() SerializationConfig {
+	return SerializationConfig{
+		MaxDepth:        10,
+		MaxKeys:         100,
+		MaxElements:     1000,
+		DisallowedTypes: []string{"func", "chan", "unsafe.Pointer"},
+		EnableStrict:    true,
+		MaxStringLength: 1024 * 1024,
+		MaxBinarySize:   10 * 1024 * 1024,
+	}
 }
 
 type HandlerConfig struct {
@@ -32,27 +75,6 @@ type HandlerConfig struct {
 	Serialization      SerializationConfig
 }
 
-type ServerConfig struct {
-	Port       int
-	Path       string
-	EnableCORS bool
-	EnableSSL  bool
-	CertFile   string
-	KeyFile    string
-}
-
-type Middleware func(http.Handler) http.Handler
-type AuthFunc func(*http.Request) (map[string]interface{}, error)
-
-func DefaultServerConfig() *ServerConfig {
-	return &ServerConfig{
-		Port:       8080,
-		Path:       "/ws",
-		EnableCORS: true,
-		EnableSSL:  false,
-	}
-}
-
 func DefaultHandlerConfig() *HandlerConfig {
 	return &HandlerConfig{
 		MaxConnections:     1000,
@@ -67,14 +89,20 @@ func DefaultHandlerConfig() *HandlerConfig {
 	}
 }
 
-func DefaultSerializerConfig() SerializationConfig {
-	return SerializationConfig{
-		MaxDepth:        10,
-		MaxKeys:         100,
-		MaxElements:     1000,
-		DisallowedTypes: []string{"func", "chan", "unsafe.Pointer"},
-		EnableStrict:    true,
-		MaxStringLength: 1024 * 1024,
-		MaxBinarySize:   10 * 1024 * 1024,
+type ServerConfig struct {
+	Port       int
+	Path       string
+	EnableCORS bool
+	EnableSSL  bool
+	CertFile   string
+	KeyFile    string
+}
+
+func DefaultServerConfig() *ServerConfig {
+	return &ServerConfig{
+		Port:       8080,
+		Path:       "/ws",
+		EnableCORS: true,
+		EnableSSL:  false,
 	}
 }

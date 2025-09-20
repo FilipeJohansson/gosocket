@@ -5,6 +5,7 @@ package gosocket
 
 import (
 	"fmt"
+	"net/http"
 	"runtime/debug"
 	"sync/atomic"
 	"time"
@@ -12,6 +13,8 @@ import (
 
 var clientCounter atomic.Uint64
 
+type Middleware func(http.Handler) http.Handler
+type AuthFunc func(*http.Request) (map[string]interface{}, error)
 type UniversalOption func(HasHandler) error
 
 type HasHandler interface {

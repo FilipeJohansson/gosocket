@@ -296,6 +296,14 @@ func WithMessageBufferSize(size int) UniversalOption {
 	}
 }
 
+func WithRateLimit(config RateLimiterConfig) UniversalOption {
+	return func(h HasHandler) error {
+		handler := h.Handler()
+		handler.rateLimiter = NewRateLimiterManager(config)
+		return nil
+	}
+}
+
 // ===== EVENTS HANDLERS =====
 
 // OnConnect sets a handler for the OnConnect event. The OnConnect event is

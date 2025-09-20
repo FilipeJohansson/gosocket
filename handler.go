@@ -51,6 +51,8 @@ type Handler struct {
 	hubRunning  sync.Once
 	middlewares []Middleware
 	mu          sync.RWMutex
+
+	rateLimiter *RateLimiterManager
 }
 
 // NewHandler returns a new instance of Handler with default configuration.
@@ -58,6 +60,8 @@ type Handler struct {
 // read and write buffers to 1024 bytes. The default encoding is JSON, but you can
 // change it by calling the WithEncoding method.
 func NewHandler(options ...UniversalOption) (*Handler, error) {
+	rl := NewRateLimiterManager(DefaultRateLimiterConfig())
+
 	h := &Handler{
 		hub:         NewHub(),
 		config:      DefaultHandlerConfig(),
@@ -68,6 +72,8 @@ func NewHandler(options ...UniversalOption) (*Handler, error) {
 			WriteBufferSize: 1024,
 		},
 		mu: sync.RWMutex{},
+
+		rateLimiter: rl,
 	}
 
 	for _, o := range options {
@@ -204,6 +210,11 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	handlerCtx := NewHandlerContextFromRequest(h, r)
 	handlerCtx.connInfo.ClientIP = getClientIPFromRequest(r)
 	handlerCtx.connInfo.RequestID = generateRequestID()
+
+	if !h.rateLimiter.AllowIP(r.RemoteAddr) {
+		http.Error(w, ErrTooManyRequests.Error(), http.StatusTooManyRequests)
+		return
+	}
 
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -408,9 +419,27 @@ func (h *Handler) handleClientRead(client *Client) {
 		err         error
 	}, 1)
 
+	maxViolations := h.rateLimiter.config.MaxRateLimitViolations
+	violations := 0
+
 	go func() {
 		defer close(messageChan)
 		for {
+			if h.rateLimiter != nil && (!h.rateLimiter.AllowClient(client.ID) || !h.rateLimiter.AllowNetAddr(conn.RemoteAddr())) {
+				violations++
+
+				if violations >= maxViolations {
+					messageChan <- struct {
+						messageType int
+						data        []byte
+						err         error
+					}{0, nil, ErrRateLimitExceeded}
+					return
+				}
+
+				continue
+			}
+
 			messageType, data, err := conn.ReadMessage()
 			select {
 			case messageChan <- struct {
@@ -431,7 +460,11 @@ func (h *Handler) handleClientRead(client *Client) {
 	for {
 		select {
 		case <-ctx.Done():
-			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"), time.Now().Add(h.config.WriteTimeout))
+			_ = conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseGoingAway, ErrServerShutdown.Error()),
+				time.Now().Add(h.config.WriteTimeout),
+			)
 			return
 
 		case msg, ok := <-messageChan:
@@ -440,6 +473,14 @@ func (h *Handler) handleClientRead(client *Client) {
 			}
 
 			if msg.err != nil {
+				if errors.Is(msg.err, ErrRateLimitExceeded) {
+					_ = conn.WriteControl(
+						websocket.CloseMessage,
+						websocket.FormatCloseMessage(websocket.CloseTryAgainLater, ErrRateLimitExceeded.Error()),
+						time.Now().Add(h.config.WriteTimeout),
+					)
+				}
+
 				if websocket.IsUnexpectedCloseError(msg.err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 					if h.events.OnError != nil {
 						_ = h.events.OnError(client, msg.err, handlerCtx)

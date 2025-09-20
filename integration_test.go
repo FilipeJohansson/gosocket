@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,10 +47,6 @@ func TestBroadcast(t *testing.T) {
 
 	server, err := NewServer(
 		WithPath("/ws"),
-		OnConnect(func(c *Client, ctx *Context) error {
-			c.UserData = map[string]interface{}{"id": c.ID}
-			return nil
-		}),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
 			c.Hub.BroadcastMessage(m)
 			return nil
@@ -121,6 +118,15 @@ func TestDisconnect(t *testing.T) {
 func TestRapidMessages(t *testing.T) {
 	server, err := NewServer(
 		WithPath("/ws"),
+		WithRateLimit(RateLimiterConfig{
+			PerClientRate:          3000,
+			PerClientBurst:         3000,
+			PerIPRate:              3000,
+			PerIPBurst:             3000,
+			CleanupInterval:        time.Minute,
+			EntryTTL:               time.Minute,
+			MaxRateLimitViolations: 3000,
+		}),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
 			return c.Send(m.RawData)
 		}),
@@ -157,6 +163,15 @@ func TestConcurrentClients(t *testing.T) {
 
 	server, err := NewServer(
 		WithPath("/ws"),
+		WithRateLimit(RateLimiterConfig{
+			PerClientRate:          3000,
+			PerClientBurst:         3000,
+			PerIPRate:              3000,
+			PerIPBurst:             3000,
+			CleanupInterval:        time.Minute,
+			EntryTTL:               time.Minute,
+			MaxRateLimitViolations: 3000,
+		}),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
 			if bytes.HasPrefix(m.RawData, []byte("[ID]")) {
 				mu.Lock()
@@ -237,6 +252,15 @@ func TestConcurrentBroadcast(t *testing.T) {
 
 	server, err := NewServer(
 		WithPath("/ws"),
+		WithRateLimit(RateLimiterConfig{
+			PerClientRate:          3000,
+			PerClientBurst:         3000,
+			PerIPRate:              3000,
+			PerIPBurst:             3000,
+			CleanupInterval:        time.Minute,
+			EntryTTL:               time.Minute,
+			MaxRateLimitViolations: 3000,
+		}),
 		WithMessageBufferSize(1024),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
 			c.Hub.BroadcastMessage(m)
@@ -855,23 +879,28 @@ func TestRoomsIsolation(t *testing.T) {
 	require.NotContains(t, received["r2b"], "hello-room1")
 }
 
-// TODO: uncomment this test once rate limiter is implemented
-/* func TestRateLimiting(t *testing.T) {
-	const clientCount = 5
-	const messagesToSend = 1000
+func TestRateLimitingEnforced(t *testing.T) {
+	const clientCount = 3
+	const messagesPerClient = 50
+
+	rlConfig := DefaultRateLimiterConfig()
+	rlConfig.PerClientRate = 5
+	rlConfig.PerClientBurst = 5
+	rlConfig.PerIPRate = 10
+	rlConfig.PerIPBurst = 10
 
 	server, err := NewServer(
-		WithPath("/ws"),
-		WithRateLimit(100, time.Second),
+		WithRateLimit(rlConfig),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			c.Hub.BroadcastMessage(m)
-			return nil
+			// echo msg
+			return c.SendMessage(m)
 		}),
 	)
 	require.NoError(t, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
+
 	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
 
 	var clients []*websocket.Conn
@@ -882,39 +911,45 @@ func TestRoomsIsolation(t *testing.T) {
 		defer ws.Close()
 	}
 
-	var readers sync.WaitGroup
-	for i, ws := range clients {
-		readers.Add(1)
-		go func(idx int, conn *websocket.Conn) {
-			defer readers.Done()
+	var wg sync.WaitGroup
+	var rateLimitHits int32
+
+	for _, ws := range clients {
+		ws.SetCloseHandler(func(code int, text string) error {
+			if code == websocket.CloseTryAgainLater {
+				atomic.AddInt32(&rateLimitHits, 1)
+			}
+			return nil
+		})
+	}
+
+	for _, ws := range clients {
+		wg.Add(1)
+		go func(conn *websocket.Conn) {
+			defer wg.Done()
 			for {
 				_, _, err := conn.ReadMessage()
 				if err != nil {
 					return
 				}
 			}
-		}(i, ws)
+		}(ws)
 	}
 
-	var writers sync.WaitGroup
-	for i, ws := range clients {
-		writers.Add(1)
-		go func(idx int, conn *websocket.Conn) {
-			defer writers.Done()
-			for j := 0; j < messagesToSend; j++ {
-				msg := fmt.Sprintf("client-%d-msg-%d", idx, j)
-				_ = conn.WriteMessage(websocket.TextMessage, []byte(msg))
-			}
-		}(i, ws)
-	}
-
-	writers.Wait()
-	time.Sleep(500 * time.Millisecond)
 	for _, ws := range clients {
-		_ = ws.Close()
+		wg.Add(1)
+		go func(conn *websocket.Conn) {
+			defer wg.Done()
+			for i := 0; i < messagesPerClient; i++ {
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("msg-%d", i)))
+			}
+		}(ws)
 	}
-	readers.Wait()
-} */
+
+	wg.Wait()
+
+	require.Greater(t, atomic.LoadInt32(&rateLimitHits), int32(0), "Rate limite not enforced")
+}
 
 func TestHubShutdown(t *testing.T) {
 	const clientCount = 5
