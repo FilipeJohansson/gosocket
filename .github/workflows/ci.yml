@@ -66,6 +66,7 @@ jobs:
         run: go test -v -race -coverprofile=coverage.txt ./...
 
       - name: Generate coverage report
+        if: ${{ ! env.ACT }}
         run: go tool cover -func=coverage.txt
 
       - name: Upload coverage to Codecov
@@ -79,4 +80,5 @@ jobs:
           fail_ci_if_error: false
 
       - name: Build project
+        if: ${{ ! env.ACT }}
         run: go build -v ./...
