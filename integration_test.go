@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEcho(t *testing.T) {
+func TestIntegration_Echo(t *testing.T) {
 	server, err := NewServer(
 		WithPath("/ws"),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
@@ -43,7 +43,7 @@ func TestEcho(t *testing.T) {
 	require.Equal(t, msg, resp)
 }
 
-func TestBroadcast(t *testing.T) {
+func TestIntegration_Broadcast(t *testing.T) {
 	var mu sync.Mutex
 	received := make(map[string][][]byte)
 
@@ -91,7 +91,7 @@ func TestBroadcast(t *testing.T) {
 	}
 }
 
-func TestDisconnect(t *testing.T) {
+func TestIntegration_Disconnect(t *testing.T) {
 	disconnectedCh := make(chan struct{})
 
 	var disconnected bool
@@ -117,7 +117,7 @@ func TestDisconnect(t *testing.T) {
 	require.True(t, disconnected)
 }
 
-func TestRapidMessages(t *testing.T) {
+func TestIntegration_RapidMessages(t *testing.T) {
 	server, err := NewServer(
 		WithPath("/ws"),
 		WithRateLimit(RateLimiterConfig{
@@ -153,7 +153,7 @@ func TestRapidMessages(t *testing.T) {
 	}
 }
 
-func TestConcurrentClients(t *testing.T) {
+func TestIntegration_ConcurrentClients(t *testing.T) {
 	const clientsCount = 100
 	const messagesPerClient = 20
 
@@ -245,7 +245,7 @@ func TestConcurrentClients(t *testing.T) {
 	}
 }
 
-func TestConcurrentBroadcast(t *testing.T) {
+func TestIntegration_ConcurrentBroadcast(t *testing.T) {
 	const clientsCount = 10
 	const messagesPerClient = 100
 
@@ -320,7 +320,7 @@ func TestConcurrentBroadcast(t *testing.T) {
 	}
 }
 
-func TestUnexpectedDisconnect(t *testing.T) {
+func TestIntegration_UnexpectedDisconnect(t *testing.T) {
 	const clientsCount = 5
 	const messagesPerClient = 3
 
@@ -390,7 +390,7 @@ func TestUnexpectedDisconnect(t *testing.T) {
 	}
 }
 
-func TestReconnect(t *testing.T) {
+func TestIntegration_Reconnect(t *testing.T) {
 	const messagesPerClient = 3
 
 	var mu sync.Mutex
@@ -483,7 +483,7 @@ func TestReconnect(t *testing.T) {
 	require.GreaterOrEqual(t, len(received["client-2-reconnected"]), messagesPerClient)
 }
 
-func TestLargeMessages(t *testing.T) {
+func TestIntegration_LargeMessages(t *testing.T) {
 	const payloadSize = 512 * 1024 // 512 KB
 	const totalMessages = 3
 
@@ -527,7 +527,7 @@ func TestLargeMessages(t *testing.T) {
 	}
 }
 
-func TestLargeMessagesEcho(t *testing.T) {
+func TestIntegration_LargeMessagesEcho(t *testing.T) {
 	const payloadSize = 512 * 1024 // 512 KB
 	const totalMessages = 10
 
@@ -596,7 +596,7 @@ func TestLargeMessagesEcho(t *testing.T) {
 	}
 }
 
-func TestLargeMessagesConcurrent(t *testing.T) {
+func TestIntegration_LargeMessagesConcurrent(t *testing.T) {
 	const clientCount = 3
 	const payloadSize = 256 * 1024 // 256 KB
 	const messagesPerClient = 5
@@ -678,7 +678,7 @@ func TestLargeMessagesConcurrent(t *testing.T) {
 	}
 }
 
-func TestLargeMessageBroadcast(t *testing.T) {
+func TestIntegration_LargeMessageBroadcast(t *testing.T) {
 	const clientCount = 4
 	const payloadSize = 128 * 1024 // 128 KB
 	const totalBroadcasts = 3
@@ -765,7 +765,7 @@ func TestLargeMessageBroadcast(t *testing.T) {
 	}
 }
 
-func TestLargeMessagesWithFailures(t *testing.T) {
+func TestIntegration_LargeMessagesWithFailures(t *testing.T) {
 	const payloadSize = 500 * 1024 // 500 KB
 	const totalMessages = 5
 
@@ -829,7 +829,7 @@ func TestLargeMessagesWithFailures(t *testing.T) {
 	require.Greater(t, atomic.LoadInt32(&successCount), int32(0))
 }
 
-func TestProgressiveMessageSizes(t *testing.T) {
+func TestIntegration_ProgressiveMessageSizes(t *testing.T) {
 	sizes := []int{
 		1 * 1024,   // 1 KB
 		10 * 1024,  // 10 KB
@@ -909,7 +909,7 @@ func TestProgressiveMessageSizes(t *testing.T) {
 	}
 }
 
-func TestMessageOrder(t *testing.T) {
+func TestIntegration_MessageOrder(t *testing.T) {
 	const totalMessages = 20
 
 	var mu sync.Mutex
@@ -951,7 +951,7 @@ func TestMessageOrder(t *testing.T) {
 	}
 }
 
-func TestBroadcastMessageOrder(t *testing.T) {
+func TestIntegration_BroadcastMessageOrder(t *testing.T) {
 	const totalMessages = 15
 
 	var mu sync.Mutex
@@ -1035,7 +1035,7 @@ func TestBroadcastMessageOrder(t *testing.T) {
 	}
 }
 
-func TestMultipleHubsIsolation(t *testing.T) {
+func TestIntegration_MultipleHubsIsolation(t *testing.T) {
 	var mu sync.Mutex
 	receivedHub1 := make([]string, 0)
 	receivedHub2 := make([]string, 0)
@@ -1125,7 +1125,7 @@ func TestMultipleHubsIsolation(t *testing.T) {
 	require.NotContains(t, receivedHub2, "hub1-msg")
 }
 
-func TestRoomsIsolation(t *testing.T) {
+func TestIntegration_RoomsIsolation(t *testing.T) {
 	var mu sync.Mutex
 	received := make(map[string][]string)
 
@@ -1219,7 +1219,7 @@ func TestRoomsIsolation(t *testing.T) {
 	require.NotContains(t, received["r2b"], "hello-room1")
 }
 
-func TestRateLimitingEnforced(t *testing.T) {
+func TestIntegration_RateLimitingEnforced(t *testing.T) {
 	const clientCount = 3
 	const messagesPerClient = 50
 
@@ -1291,7 +1291,7 @@ func TestRateLimitingEnforced(t *testing.T) {
 	require.Greater(t, atomic.LoadInt32(&rateLimitHits), int32(0), "Rate limite not enforced")
 }
 
-func TestHubShutdown(t *testing.T) {
+func TestIntegration_HubShutdown(t *testing.T) {
 	const clientCount = 5
 	const messagesPerClient = 10
 
@@ -1352,7 +1352,7 @@ func TestHubShutdown(t *testing.T) {
 }
 
 // Test different message types (Text, Binary, Ping, Pong)
-func TestMessageTypes(t *testing.T) {
+func TestIntegration_MessageTypes(t *testing.T) {
 	var mu sync.Mutex
 	received := make(map[int][]byte)
 
@@ -1396,7 +1396,7 @@ func TestMessageTypes(t *testing.T) {
 }
 
 // Test JSON message handling
-func TestJSONMessages(t *testing.T) {
+func TestIntegration_JSONMessages(t *testing.T) {
 	type TestMessage struct {
 		Type string `json:"type"`
 		Data string `json:"data"`
@@ -1455,7 +1455,7 @@ func TestJSONMessages(t *testing.T) {
 }
 
 // Test error handling in callbacks
-func TestErrorHandling(t *testing.T) {
+func TestIntegration_ErrorHandling(t *testing.T) {
 	var errorsCaught int32
 
 	server, err := NewServer(
@@ -1506,7 +1506,7 @@ func TestErrorHandling(t *testing.T) {
 }
 
 // Test memory management under load
-func TestMemoryLeaks(t *testing.T) {
+func TestIntegration_MemoryLeaks(t *testing.T) {
 	const rounds = 5
 	const clientsPerRound = 10
 	const messagesPerClient = 20
@@ -1584,7 +1584,7 @@ func TestMemoryLeaks(t *testing.T) {
 }
 
 // Alternative memory leak test without rate limiting concerns
-func TestMemoryLeaksWithoutMessages(t *testing.T) {
+func TestIntegration_MemoryLeaksWithoutMessages(t *testing.T) {
 	const rounds = 10
 	const clientsPerRound = 20
 
@@ -1626,7 +1626,7 @@ func TestMemoryLeaksWithoutMessages(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 }
 
-func TestCustomHeadersValidation(t *testing.T) {
+func TestIntegration_CustomHeadersValidation(t *testing.T) {
 	headersCh := make(chan map[string]string, 1)
 
 	server, err := NewServer(
@@ -1671,7 +1671,7 @@ func TestCustomHeadersValidation(t *testing.T) {
 	}
 }
 
-func TestMultipleClientsWithDifferentHeaders(t *testing.T) {
+func TestIntegration_MultipleClientsWithDifferentHeaders(t *testing.T) {
 	type clientHeaders struct {
 		clientID string
 		headers  map[string]string
@@ -1768,7 +1768,7 @@ func TestMultipleClientsWithDifferentHeaders(t *testing.T) {
 	}
 }
 
-func TestIgnoredHeaders(t *testing.T) {
+func TestIntegration_IgnoredHeaders(t *testing.T) {
 	headersCh := make(chan map[string]string, 1)
 
 	server, err := NewServer(
@@ -1819,7 +1819,7 @@ func TestIgnoredHeaders(t *testing.T) {
 }
 
 // Test room management edge cases
-func TestRoomEdgeCases(t *testing.T) {
+func TestIntegration_RoomEdgeCases(t *testing.T) {
 	var mu sync.Mutex
 	events := make([]string, 0)
 
@@ -1961,7 +1961,7 @@ func TestRoomEdgeCases(t *testing.T) {
 }
 
 // Test connection limits and cleanup
-func TestConnectionLimits(t *testing.T) {
+func TestIntegration_ConnectionLimits(t *testing.T) {
 	const maxConnections = 5
 
 	server, err := NewServer(
