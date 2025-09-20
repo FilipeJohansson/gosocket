@@ -156,15 +156,6 @@ gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx 
 - **[Middleware Example](examples/server/with-middlewares)** - Authentication and logging middleware
 - **[Gin Integration](examples/gin-integration)** - Add WebSockets to Gin apps
 
-## Performance
-
-GoSocket is built for production use:
-
-- **Memory efficient**: Minimal allocation per connection
-- **Fast**: Built on proven WebSocket libraries
-- **Scalable**: Handle thousands of concurrent connections
-- **Reliable**: Comprehensive error handling
-
 ## Features
 
 - **Quick Setup** - Minimal code to get started
@@ -178,7 +169,8 @@ GoSocket is built for production use:
 - [x] **v0.1**: Basic WebSocket server + middleware support
 - [x] **v0.2**: Rooms and broadcasting  
 - [x] **v0.3**: Functional options pattern
-- [ ] **v0.4**: Protobuf & MessagePack support
+- [x] **v0.4**: Rate Limit, logging and other improvements
+- [ ] **v0.5**: Protobuf & MessagePack support
 - [ ] **v1.0**: Production ready
 
 ## Contributing
