@@ -63,18 +63,22 @@ jobs:
           args: ./...
 
       - name: Run tests with race detection
-        run: go test -v -race -coverprofile=coverage.out ./...
+        run: go test -v -race -coverprofile=coverage.txt ./...
 
       - name: Generate coverage report
-        run: go tool cover -func=coverage.out
+        if: ${{ ! env.ACT }}
+        run: go tool cover -func=coverage.txt
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        if: ${{ ! env.ACT }}
+        uses: codecov/codecov-action@v5
         with:
-          file: ./coverage.out
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: ./coverage.txt
           flags: unittests
           name: codecov-umbrella
           fail_ci_if_error: false
 
       - name: Build project
+        if: ${{ ! env.ACT }}
         run: go build -v ./...

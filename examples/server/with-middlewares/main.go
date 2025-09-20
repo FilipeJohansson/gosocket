@@ -18,7 +18,7 @@ func main() {
 		gosocket.WithMaxConnections(100),
 		gosocket.WithMiddleware(LoggingMiddleware),
 		gosocket.WithMiddleware(AuthMiddleware),
-		gosocket.OnConnect(func(c *gosocket.Client, ctx *gosocket.HandlerContext) error {
+		gosocket.OnConnect(func(c *gosocket.Client, ctx *gosocket.Context) error {
 			fmt.Printf("Client connected: %s\n", c.ID)
 			return nil
 		}),

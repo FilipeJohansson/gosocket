@@ -15,7 +15,7 @@ func main() {
 	ws, err := gosocket.NewHandler(
 		gosocket.WithMiddleware(LoggingMiddleware),
 		gosocket.WithMiddleware(AuthMiddleware),
-		gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
+		gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
 			fmt.Printf("Client connected: %s\n", client.ID)
 			return nil
 		}),

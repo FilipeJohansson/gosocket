@@ -5,9 +5,16 @@ package gosocket
 
 import (
 	"fmt"
+	"net/http"
+	"runtime/debug"
+	"sync/atomic"
 	"time"
 )
 
+var clientCounter atomic.Uint64
+
+type Middleware func(http.Handler) http.Handler
+type AuthFunc func(*http.Request) (map[string]interface{}, error)
 type UniversalOption func(HasHandler) error
 
 type HasHandler interface {
@@ -29,5 +36,17 @@ type ConnectionInfo struct {
 }
 
 func GenerateClientID() string {
-	return fmt.Sprintf("client_%d", time.Now().UnixNano())
+	return fmt.Sprintf("client_%d_%d", time.Now().UnixNano(), clientCounter.Add(1))
+}
+
+func safeGoroutine(name string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("PANIC RECOVERED in %s: %v\nStack trace:\n%s\n",
+					name, r, string(debug.Stack()))
+			}
+		}()
+		fn()
+	}()
 }

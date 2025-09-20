@@ -24,11 +24,11 @@ func main() {
 		gosocket.WithPort(8081),
 		gosocket.WithPath("/ws"),
 		gosocket.WithJSONSerializer(),
-		gosocket.OnConnect(func(c *gosocket.Client, hc *gosocket.HandlerContext) error {
+		gosocket.OnConnect(func(c *gosocket.Client, hc *gosocket.Context) error {
 			fmt.Printf("Client connected: %s\n", c.ID)
 			return nil
 		}),
-		gosocket.OnDisconnect(func(c *gosocket.Client, hc *gosocket.HandlerContext) error {
+		gosocket.OnDisconnect(func(c *gosocket.Client, hc *gosocket.Context) error {
 			fmt.Printf("Client disconnected: %s\n", c.ID)
 			return nil
 		}),

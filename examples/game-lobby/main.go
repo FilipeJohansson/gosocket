@@ -49,7 +49,7 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func onConnect(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
+func onConnect(client *gosocket.Client, ctx *gosocket.Context) error {
 	client.JoinRoom("lobby")
 	return client.SendJSON(Message{
 		Type: "welcome",
@@ -58,7 +58,7 @@ func onConnect(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 	})
 }
 
-func onDisconnect(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
+func onDisconnect(client *gosocket.Client, ctx *gosocket.Context) error {
 	mu.Lock()
 	delete(players, client.ID)
 
@@ -80,7 +80,7 @@ func onDisconnect(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
 	return nil
 }
 
-func onMessage(client *gosocket.Client, data interface{}, ctx *gosocket.HandlerContext) error {
+func onMessage(client *gosocket.Client, data interface{}, ctx *gosocket.Context) error {
 	jsonBytes, _ := json.Marshal(data)
 	var msg Message
 	json.Unmarshal(jsonBytes, &msg)
@@ -99,7 +99,7 @@ func onMessage(client *gosocket.Client, data interface{}, ctx *gosocket.HandlerC
 	return nil
 }
 
-func handleSetName(client *gosocket.Client, name string, ctx *gosocket.HandlerContext) error {
+func handleSetName(client *gosocket.Client, name string, ctx *gosocket.Context) error {
 	mu.Lock()
 	players[client.ID] = name
 	mu.Unlock()
@@ -112,7 +112,7 @@ func handleSetName(client *gosocket.Client, name string, ctx *gosocket.HandlerCo
 	})
 }
 
-func handleCreateGame(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
+func handleCreateGame(client *gosocket.Client, ctx *gosocket.Context) error {
 	mu.Lock()
 	gameID := fmt.Sprintf("game_%d", time.Now().Unix())
 	games[gameID] = []string{client.ID}
@@ -128,7 +128,7 @@ func handleCreateGame(client *gosocket.Client, ctx *gosocket.HandlerContext) err
 	})
 }
 
-func handleJoinGame(client *gosocket.Client, gameID string, ctx *gosocket.HandlerContext) error {
+func handleJoinGame(client *gosocket.Client, gameID string, ctx *gosocket.Context) error {
 	mu.Lock()
 	if playerIDs, exists := games[gameID]; exists && len(playerIDs) < 4 {
 		games[gameID] = append(playerIDs, client.ID)
@@ -153,7 +153,7 @@ func handleJoinGame(client *gosocket.Client, gameID string, ctx *gosocket.Handle
 	})
 }
 
-func handleLeaveGame(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
+func handleLeaveGame(client *gosocket.Client, ctx *gosocket.Context) error {
 	mu.Lock()
 	for gameID, playerIDs := range games {
 		for i, id := range playerIDs {
@@ -173,7 +173,7 @@ func handleLeaveGame(client *gosocket.Client, ctx *gosocket.HandlerContext) erro
 	return nil
 }
 
-func broadcastLobbyState(ctx *gosocket.HandlerContext) {
+func broadcastLobbyState(ctx *gosocket.Context) {
 	mu.RLock()
 
 	gameList := make([]map[string]interface{}, 0)
@@ -205,7 +205,7 @@ func broadcastLobbyState(ctx *gosocket.HandlerContext) {
 	})
 }
 
-func broadcastGameState(gameID string, ctx *gosocket.HandlerContext) {
+func broadcastGameState(gameID string, ctx *gosocket.Context) {
 	mu.RLock()
 	playerIDs := games[gameID]
 	gameNames := make([]string, len(playerIDs))

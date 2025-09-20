@@ -4,29 +4,34 @@
 package gosocket
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"net/http"
-	"strings"
+	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-type OnConnectFunc func(c *Client, ctx *HandlerContext) error
-type OnDisconnectFunc func(c *Client, ctx *HandlerContext) error
-type OnMessageFunc func(c *Client, m *Message, ctx *HandlerContext) error            // generic handler
-type OnRawMessageFunc func(c *Client, m []byte, ctx *HandlerContext) error           // raw data handler
-type OnJSONMessageFunc func(c *Client, m interface{}, ctx *HandlerContext) error     // JSON specific handler
-type OnProtobufMessageFunc func(c *Client, m interface{}, ctx *HandlerContext) error // Protobuf specific handler
-type OnErrorFunc func(c *Client, err error, ctx *HandlerContext) error
-type OnPingFunc func(c *Client, ctx *HandlerContext) error
-type OnPongFunc func(c *Client, ctx *HandlerContext) error
+type OnBeforeConnectFunc func(r *http.Request, ctx *Context) error
+type OnConnectFunc func(c *Client, ctx *Context) error
+type OnDisconnectFunc func(c *Client, ctx *Context) error
+type OnMessageFunc func(c *Client, m *Message, ctx *Context) error            // generic handler
+type OnRawMessageFunc func(c *Client, m []byte, ctx *Context) error           // raw data handler
+type OnJSONMessageFunc func(c *Client, m interface{}, ctx *Context) error     // JSON specific handler
+type OnProtobufMessageFunc func(c *Client, m interface{}, ctx *Context) error // Protobuf specific handler
+type OnErrorFunc func(c *Client, err error, ctx *Context) error
+type OnPingFunc func(c *Client, ctx *Context) error
+type OnPongFunc func(c *Client, ctx *Context) error
 
 type Events struct {
+	OnBeforeConnect   OnBeforeConnectFunc
 	OnConnect         OnConnectFunc
 	OnDisconnect      OnDisconnectFunc
 	OnMessage         OnMessageFunc
@@ -48,6 +53,8 @@ type Handler struct {
 	hubRunning  sync.Once
 	middlewares []Middleware
 	mu          sync.RWMutex
+
+	rateLimiter *RateLimiterManager
 }
 
 // NewHandler returns a new instance of Handler with default configuration.
@@ -55,6 +62,8 @@ type Handler struct {
 // read and write buffers to 1024 bytes. The default encoding is JSON, but you can
 // change it by calling the WithEncoding method.
 func NewHandler(options ...UniversalOption) (*Handler, error) {
+	rl := NewRateLimiterManager(DefaultRateLimiterConfig())
+
 	h := &Handler{
 		hub:         NewHub(),
 		config:      DefaultHandlerConfig(),
@@ -65,6 +74,8 @@ func NewHandler(options ...UniversalOption) (*Handler, error) {
 			WriteBufferSize: 1024,
 		},
 		mu: sync.RWMutex{},
+
+		rateLimiter: rl,
 	}
 
 	for _, o := range options {
@@ -126,7 +137,7 @@ func (h *Handler) Handler() *Handler {
 // all configured middlewares to the request. Finally, it calls
 // the configured WebSocket handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.ensureHubRunning()
+	h.ensureHubRunning(context.Background())
 
 	if len(h.middlewares) > 0 {
 		wsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -164,6 +175,14 @@ func (h *Handler) ApplyMiddlewares(handler http.Handler) http.Handler {
 //
 // This method is safe to call concurrently.
 func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("PANIC RECOVERED in HandleWebSocket: %v\nStack trace:\n%s\n",
+				r, string(debug.Stack()))
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
+	}()
+
 	if h.upgrader.CheckOrigin == nil {
 		h.upgrader.CheckOrigin = func(r *http.Request) bool {
 			if len(h.config.AllowedOrigins) == 0 {
@@ -185,7 +204,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		var err error
 		userData, err = h.authFunc(r)
 		if err != nil {
-			http.Error(w, "Authentication failed: "+err.Error(), http.StatusUnauthorized)
+			http.Error(w, newAuthFailureError(err).Error(), http.StatusUnauthorized)
 			return
 		}
 	}
@@ -194,17 +213,28 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	handlerCtx.connInfo.ClientIP = getClientIPFromRequest(r)
 	handlerCtx.connInfo.RequestID = generateRequestID()
 
+	if !h.rateLimiter.AllowIP(r.RemoteAddr) {
+		http.Error(w, ErrTooManyRequests.Error(), http.StatusTooManyRequests)
+		return
+	}
+
+	if h.events.OnBeforeConnect != nil {
+		if err := h.events.OnBeforeConnect(r, handlerCtx); err != nil {
+			http.Error(w, fmt.Sprintf("connection rejected: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
+
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		if h.events.OnError != nil {
-			_ = h.events.OnError(nil, fmt.Errorf("websocket upgrade failed: %w", err), handlerCtx)
+			_ = h.events.OnError(nil, newUpgradeFailedError(err), handlerCtx)
 		}
 		return
 	}
 
 	clientId := GenerateClientID()
-	client := NewClient(clientId, conn, h.hub)
-
+	client := NewClient(clientId, conn, h.hub, h.config.MessageChanBufSize)
 	client.ConnInfo = handlerCtx.connInfo
 
 	for key, value := range userData {
@@ -215,7 +245,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	if err := conn.SetReadDeadline(time.Now().Add(h.config.PongWait)); err != nil {
 		if h.events.OnError != nil {
-			_ = h.events.OnError(nil, fmt.Errorf("failed to set read deadline: %w", err), handlerCtx)
+			_ = h.events.OnError(nil, newSetReadDeadlineError(err), handlerCtx)
 		}
 		_ = conn.Close()
 		return
@@ -223,7 +253,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	conn.SetPongHandler(func(string) error {
 		if err := conn.SetReadDeadline(time.Now().Add(h.config.PongWait)); err != nil {
-			return fmt.Errorf("failed to set read deadline in pong handler: %w", err)
+			return newSetReadDeadlineError(err)
 		}
 		if h.events.OnPong != nil {
 			if err := h.events.OnPong(client, handlerCtx); err != nil {
@@ -239,15 +269,26 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		if err := h.events.OnConnect(client, handlerCtx); err != nil {
 			h.hub.RemoveClient(client)
 			_ = conn.Close()
+			handlerCtx.Cancel()
 			if h.events.OnError != nil {
-				_ = h.events.OnError(client, fmt.Errorf("connection handler failed: %w", err), handlerCtx)
+				_ = h.events.OnError(client, newEventFailedError("OnConnect", err), handlerCtx)
 			}
 			return
 		}
 	}
 
-	go h.handleClientWrite(client)
-	go h.handleClientRead(client)
+	safeGoroutine("ClientWrite", func() {
+		h.handleClientWriteWithContext(client, handlerCtx)
+	})
+
+	safeGoroutine("ClientRead", func() {
+		h.handleClientReadWithContext(client, handlerCtx)
+	})
+}
+
+func (h *Handler) handleClientWriteWithContext(client *Client, handlerCtx *Context) {
+	defer handlerCtx.Cancel()
+	h.handleClientWrite(client)
 }
 
 // handleClientWrite is a goroutine that writes messages to a client. It reads
@@ -257,30 +298,62 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 // client. If the client's websocket connection is closed or an error occurs when
 // writing to the client, it calls h.handlers.OnError if it is not nil.
 func (h *Handler) handleClientWrite(client *Client) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("PANIC RECOVERED in handleClientWrite (Client: %s): %v\n",
+				client.ID, r)
+		}
+	}()
+
+	conn, ok := client.Conn.(*websocket.Conn)
+	if !ok {
+		return
+	}
+
 	ticker := time.NewTicker(h.config.PingPeriod)
 	defer func() {
 		ticker.Stop()
-		_ = client.Conn.(*websocket.Conn).Close()
-	}()
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("PANIC RECOVERED closing connection for client %s: %v\n",
+						client.ID, r)
+				}
+			}()
 
-	conn := client.Conn.(*websocket.Conn)
+			if conn != nil {
+				_ = conn.Close()
+			}
+		}()
+	}()
 
 	handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
 
+	ctx := handlerCtx.Context()
+
 	for {
 		select {
+		case <-ctx.Done():
+			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"), time.Now().Add(h.config.WriteTimeout))
+			return
+
 		case message, ok := <-client.MessageChan:
-			// Set write deadline - if this fails, connection is likely dead
-			if err := conn.SetWriteDeadline(time.Now().Add(h.config.WriteTimeout)); err != nil {
-				if h.events.OnError != nil {
-					_ = h.events.OnError(client, fmt.Errorf("failed to set write deadline: %w", err), handlerCtx)
-				}
+			if !ok {
+				_ = conn.WriteControl(websocket.CloseMessage, []byte{}, time.Now().Add(h.config.WriteTimeout))
 				return
 			}
 
-			if !ok {
-				// Channel closed, send close message and return
-				_ = conn.WriteMessage(websocket.CloseMessage, []byte{})
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			// Set write deadline - if this fails, connection is likely dead
+			if err := conn.SetWriteDeadline(time.Now().Add(h.config.WriteTimeout)); err != nil {
+				if h.events.OnError != nil {
+					_ = h.events.OnError(client, newSetWriteDeadlineError(err), handlerCtx)
+				}
 				return
 			}
 
@@ -292,17 +365,23 @@ func (h *Handler) handleClientWrite(client *Client) {
 			}
 
 		case <-ticker.C:
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
 			// Set write deadline for ping - if this fails, connection is likely dead
 			if err := conn.SetWriteDeadline(time.Now().Add(h.config.WriteTimeout)); err != nil {
 				if h.events.OnError != nil {
-					_ = h.events.OnError(client, fmt.Errorf("failed to set write deadline for ping: %w", err), handlerCtx)
+					_ = h.events.OnError(client, newSetWriteDeadlineError(err), handlerCtx)
 				}
 				return
 			}
 
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(h.config.WriteTimeout)); err != nil {
 				if h.events.OnError != nil {
-					_ = h.events.OnError(client, fmt.Errorf("failed to send ping: %w", err), handlerCtx)
+					_ = h.events.OnError(client, newSendMessageError(err), handlerCtx)
 				}
 				return
 			}
@@ -316,6 +395,11 @@ func (h *Handler) handleClientWrite(client *Client) {
 	}
 }
 
+func (h *Handler) handleClientReadWithContext(client *Client, handlerCtx *Context) {
+	defer handlerCtx.Cancel()
+	h.handleClientRead(client)
+}
+
 // handleClientRead is a goroutine that reads messages from a client. It reads
 // from the client's websocket connection and processes the messages. If the
 // client's websocket connection is closed or an error occurs when reading from
@@ -323,47 +407,121 @@ func (h *Handler) handleClientWrite(client *Client) {
 // h.handlers.OnDisconnect when the client is done.
 func (h *Handler) handleClientRead(client *Client) {
 	defer func() {
-		h.hub.RemoveClient(client)
-		_ = client.Conn.(*websocket.Conn).Close()
+		if r := recover(); r != nil {
+			fmt.Printf("PANIC RECOVERED in handleClientRead (Client: %s): %v\n",
+				client.ID, r)
+		}
+		h.cleanupClient(client)
+	}()
 
-		if h.events.OnDisconnect != nil {
-			handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
-			// OnDisconnect might return an error, but we're in cleanup so just ignore it
-			_ = h.events.OnDisconnect(client, handlerCtx)
+	conn, ok := client.Conn.(*websocket.Conn)
+	if !ok {
+		return
+	}
+
+	handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
+	ctx := handlerCtx.Context()
+
+	messageChan := make(chan struct {
+		messageType int
+		data        []byte
+		err         error
+	}, 1)
+
+	maxViolations := h.rateLimiter.config.MaxRateLimitViolations
+	violations := 0
+
+	go func() {
+		defer close(messageChan)
+		for {
+			if h.rateLimiter != nil && (!h.rateLimiter.AllowClient(client.ID) || !h.rateLimiter.AllowNetAddr(conn.RemoteAddr())) {
+				violations++
+
+				if violations >= maxViolations {
+					messageChan <- struct {
+						messageType int
+						data        []byte
+						err         error
+					}{0, nil, ErrRateLimitExceeded}
+					return
+				}
+
+				continue
+			}
+
+			if err := conn.SetReadDeadline(time.Now().Add(h.config.ReadTimeout)); err != nil {
+				if h.events.OnError != nil {
+					_ = h.events.OnError(client, newSetReadDeadlineError(err), handlerCtx)
+				}
+				return
+			}
+
+			messageType, data, err := conn.ReadMessage()
+			select {
+			case messageChan <- struct {
+				messageType int
+				data        []byte
+				err         error
+			}{messageType, data, err}:
+			case <-ctx.Done():
+				return
+			}
+
+			if err != nil {
+				return
+			}
 		}
 	}()
 
-	conn := client.Conn.(*websocket.Conn)
-
 	for {
-		messageType, data, err := conn.ReadMessage()
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				if h.events.OnError != nil {
-					handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
-					_ = h.events.OnError(client, err, handlerCtx)
+		select {
+		case <-ctx.Done():
+			_ = conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseGoingAway, ErrServerShutdown.Error()),
+				time.Now().Add(h.config.WriteTimeout),
+			)
+			return
+
+		case msg, ok := <-messageChan:
+			if !ok {
+				return
+			}
+
+			if msg.err != nil {
+				if errors.Is(msg.err, ErrRateLimitExceeded) {
+					_ = conn.WriteControl(
+						websocket.CloseMessage,
+						websocket.FormatCloseMessage(websocket.CloseTryAgainLater, ErrRateLimitExceeded.Error()),
+						time.Now().Add(h.config.WriteTimeout),
+					)
 				}
+
+				if websocket.IsUnexpectedCloseError(msg.err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+					if h.events.OnError != nil {
+						_ = h.events.OnError(client, msg.err, handlerCtx)
+					}
+				}
+				return
 			}
-			break
-		}
 
-		// Reset read deadline - if this fails, connection might be in bad state
-		if err := conn.SetReadDeadline(time.Now().Add(h.config.PongWait)); err != nil {
-			if h.events.OnError != nil {
-				handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
-				_ = h.events.OnError(client, fmt.Errorf("failed to set read deadline: %w", err), handlerCtx)
+			// Reset read deadline - if this fails, connection might be in bad state
+			if err := conn.SetReadDeadline(time.Now().Add(h.config.PongWait)); err != nil {
+				if h.events.OnError != nil {
+					_ = h.events.OnError(client, newSetReadDeadlineError(err), handlerCtx)
+				}
+				return
 			}
-			break
-		}
 
-		message := &Message{
-			Type:    MessageType(messageType),
-			RawData: data,
-			From:    client.ID,
-			Created: time.Now(),
-		}
+			message := &Message{
+				Type:    MessageType(msg.messageType),
+				RawData: msg.data,
+				From:    client.ID,
+				Created: time.Now(),
+			}
 
-		h.processMessage(client, message)
+			h.processMessage(client, message)
+		}
 	}
 }
 
@@ -381,7 +539,7 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 	if h.events.OnMessage != nil {
 		if err := h.events.OnMessage(client, message, handlerCtx); err != nil {
 			if h.events.OnError != nil {
-				_ = h.events.OnError(client, err, handlerCtx)
+				_ = h.events.OnError(client, newEventFailedError("OnMessage", err), handlerCtx)
 			}
 		}
 	}
@@ -389,19 +547,19 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 	if h.events.OnRawMessage != nil {
 		if err := h.events.OnRawMessage(client, message.RawData, handlerCtx); err != nil {
 			if h.events.OnError != nil {
-				_ = h.events.OnError(client, err, handlerCtx)
+				_ = h.events.OnError(client, newEventFailedError("OnRawMessage", err), handlerCtx)
 			}
 		}
 	}
 
 	if h.events.OnJSONMessage != nil {
 		var jsonData interface{}
-		if err := json.Unmarshal(message.RawData, &jsonData); err == nil {
+		if err := json.Unmarshal(message.RawData, &jsonData); errors.Is(err, nil) {
 			message.Data = jsonData
 			message.Encoding = JSON
 			if err := h.events.OnJSONMessage(client, jsonData, handlerCtx); err != nil {
 				if h.events.OnError != nil {
-					_ = h.events.OnError(client, err, handlerCtx)
+					_ = h.events.OnError(client, newEventFailedError("OnJSONMessage", err), handlerCtx)
 				}
 			}
 		}
@@ -411,13 +569,34 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 
 // ensureHubRunning starts the hub if it is not already running.
 // It is safe to call concurrently.
-func (h *Handler) ensureHubRunning() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
+func (h *Handler) ensureHubRunning(ctx context.Context) {
 	h.hubRunning.Do(func() {
-		go h.hub.Run()
+		go h.hub.Run(ctx)
 	})
+}
+
+func (h *Handler) cleanupClient(client *Client) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("PANIC RECOVERED in cleanup for client %s: %v\n",
+				client.ID, r)
+		}
+	}()
+
+	if h.hub != nil {
+		h.hub.RemoveClient(client)
+	}
+
+	if client.Conn != nil {
+		if conn, ok := client.Conn.(*websocket.Conn); ok {
+			_ = conn.Close()
+		}
+	}
+
+	if h.events.OnDisconnect != nil {
+		handlerCtx := NewHandlerContextWithConnection(h, client.ConnInfo)
+		_ = h.events.OnDisconnect(client, handlerCtx)
+	}
 }
 
 // extractHeaders extracts relevant headers from the given http request.
@@ -425,18 +604,19 @@ func (h *Handler) ensureHubRunning() {
 // headers are considered: Authorization, X-Forwarded-For, X-Real-IP,
 // Accept, Accept-Language, and Accept-Encoding. If a header is not
 // present in the request, it is not included in the returned map.
-func extractHeaders(r *http.Request) map[string]string {
+func extractHeaders(r *http.Request, extraHeaders ...string) map[string]string {
 	headers := make(map[string]string)
 
 	// common headers that might be useful in handlers
-	relevantHeaders := []string{
+	relevantHeaders := []string{ // TODO: make configurable
 		"Authorization",
 		"X-Forwarded-For",
-		"X-Real-IP",
+		"X-Real-Ip",
 		"Accept",
 		"Accept-Language",
 		"Accept-Encoding",
 	}
+	relevantHeaders = append(relevantHeaders, extraHeaders...)
 
 	for _, header := range relevantHeaders {
 		if value := r.Header.Get(header); value != "" {
@@ -452,13 +632,15 @@ func extractHeaders(r *http.Request) map[string]string {
 // address from the header. Otherwise, it returns the IP address from the remote address.
 // The IP address is returned as a string in the format "192.0.2.1".
 func getClientIPFromRequest(r *http.Request) string {
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+	if ip := r.Header.Get("X-Real-Ip"); ip != "" {
 		return ip
 	}
 	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
-		return strings.Split(ip, ",")[0]
+		ip, _, _ := net.SplitHostPort(ip)
+		return ip
 	}
-	return strings.Split(r.RemoteAddr, ":")[0]
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	return ip
 }
 
 // generateRequestID returns a unique request ID as a string. The request ID

@@ -12,7 +12,7 @@ import (
 func main() {
 	// Create GoSocket handler
 	ws, err := gosocket.NewHandler(
-		gosocket.OnConnect(func(c *gosocket.Client, ctx *gosocket.HandlerContext) error {
+		gosocket.OnConnect(func(c *gosocket.Client, ctx *gosocket.Context) error {
 			return c.SendJSON(map[string]string{"status": "connected"})
 		}),
 	)

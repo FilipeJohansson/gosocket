@@ -1,4 +1,4 @@
-# 🚀 GoSocket
+# GoSocket
 
 *The simplest way to add WebSockets to your Go application*
 
@@ -10,7 +10,7 @@ Stop writing WebSocket boilerplate. Start building features.
 // That's it. You have a working WebSocket server.
 ws, _ := gosocket.NewServer(
     gosocket.WithPort(8080),
-    gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.HandlerContext) error {
+    gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.Context) error {
         client.Send(message.RawData) // Echo back
         return nil
     }),
@@ -28,7 +28,6 @@ GoSocket focuses on **developer experience** and **getting started quickly**:
 - **Built-in features** - Rooms, broadcasting, and client management included
 - **Middleware support**: Add auth, logging, CORS, whatever you need
 - **Simple API** - Intuitive methods that do what you expect
-- **Production ready** - Built on battle-tested WebSocket foundations
 - **Flexible** - Use standalone or integrate with existing HTTP servers
 - **Multiple servers**: Run chat, notifications, and admin panels on different ports simultaneously
 
@@ -55,16 +54,16 @@ func main() {
     ws, err := gosocket.NewServer(
         gosocket.WithPort(8080),
         gosocket.WithPath("/ws"),
-        gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
+        gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
             fmt.Printf("Client %s connected\n", client.ID)
             return nil
         }),
-        gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.HandlerContext) error {
+        gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.Context) error {
             // Broadcast to all clients
             ctx.BroadcastToAll(gosocket.NewRawMessage(gosocket.TextMessage, message.RawData))
             return nil
         }),
-        gosocket.OnDisconnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
+        gosocket.OnDisconnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
             fmt.Printf("Client %s disconnected\n", client.ID)
             return nil
         }),
@@ -95,7 +94,7 @@ func main() {
     
     // Add WebSocket endpoint
     ws, err := gosocket.NewHandler(
-        gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.HandlerContext) error {
+        gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.Context) error {
             client.Send(message.RawData)
             return nil
         }),
@@ -119,7 +118,7 @@ ws, _ := gosocket.NewServer(
     gosocket.WithPort(8080),
     gosocket.WithMiddleware(AuthMiddleware),
     gosocket.WithMiddleware(LoggingMiddleware),
-    gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
+    gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
         fmt.Printf("Authenticated client connected: %s\n", client.ID)
         return nil
     }),
@@ -129,12 +128,12 @@ ws, _ := gosocket.NewServer(
 ## Rooms & Broadcasting
 
 ```go
-gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.HandlerContext) error {
+gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
     client.JoinRoom("general")
     return nil
 })
 
-gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.HandlerContext) error {
+gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.Context) error {
     // Send to specific room
     ctx.BroadcastToRoom("general", message.RawData)
     
@@ -173,7 +172,6 @@ GoSocket is built for production use:
 - **Broadcasting** - Send to all clients, rooms, or individuals
 - **Flexible Integration** - Standalone server or HTTP handler
 - **Multiple Encodings** - JSON ready, Protobuf & MessagePack coming
-- **Production Ready** - Graceful shutdowns and error handling
 
 ## Roadmap
 
