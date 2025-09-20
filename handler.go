@@ -449,6 +449,13 @@ func (h *Handler) handleClientRead(client *Client) {
 				continue
 			}
 
+			if err := conn.SetReadDeadline(time.Now().Add(h.config.ReadTimeout)); err != nil {
+				if h.events.OnError != nil {
+					_ = h.events.OnError(client, newSetReadDeadlineError(err), handlerCtx)
+				}
+				return
+			}
+
 			messageType, data, err := conn.ReadMessage()
 			select {
 			case messageChan <- struct {
