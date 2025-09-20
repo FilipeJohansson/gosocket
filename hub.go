@@ -6,7 +6,6 @@ package gosocket
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"runtime/debug"
 	"sync"
 )
@@ -60,6 +59,8 @@ type IHub interface {
 
 	// IsRunning returns whether the hub is currently running.
 	IsRunning() bool
+
+	Log(logType LogType, level LogLevel, msg string, args ...interface{})
 }
 
 type Hub struct {
@@ -70,19 +71,22 @@ type Hub struct {
 	Broadcast  chan *Message
 	mu         sync.RWMutex
 	running    bool
+
+	logger *LoggerConfig
 }
 
 // NewHub creates a new Hub instance. It returns a pointer to a Hub struct.
 //
 // The created Hub instance will have empty maps for the clients and rooms.
 // The Register, Unregister and Broadcast channels will be created with a default buffer size.
-func NewHub() *Hub {
+func NewHub(logger *LoggerConfig) *Hub {
 	return &Hub{
 		Clients:    make(map[*Client]bool),
 		Rooms:      make(map[string]map[*Client]bool),
 		Register:   make(chan *Client),
 		Unregister: make(chan *Client),
 		Broadcast:  make(chan *Message),
+		logger:     logger,
 	}
 }
 
@@ -93,7 +97,7 @@ func NewHub() *Hub {
 // - Unregister: removes a client from the hub, closes the client's message channel and removes the client from all rooms
 // - Broadcast: broadcasts a message to all clients in the hub
 func (h *Hub) Run(ctx context.Context) {
-	fmt.Println("Hub started")
+	h.Log(LogTypeOther, LogLevelInfo, "Hub started")
 	h.mu.Lock()
 	h.running = true
 	h.mu.Unlock()
@@ -111,26 +115,30 @@ func (h *Hub) Run(ctx context.Context) {
 
 		case client, ok := <-h.Register:
 			if !ok {
+				h.Log(LogTypeClient, LogLevelDebug, "Register channel closed")
 				return // channel closed, hub stopped
 			}
 
 			select {
 			case <-ctx.Done():
+				h.Log(LogTypeClient, LogLevelDebug, "Register channel closed")
 				return
 			default:
 				h.mu.Lock()
 				h.Clients[client] = true
 				h.mu.Unlock()
-				fmt.Printf("Client registered: %s (total: %d)\n", client.ID, len(h.Clients))
+				h.Log(LogTypeClient, LogLevelDebug, "Client registered: %s", client.ID)
 			}
 
 		case client, ok := <-h.Unregister:
 			if !ok {
+				h.Log(LogTypeClient, LogLevelDebug, "Unregister channel closed")
 				return // channel closed, hub stopped
 			}
 
 			select {
 			case <-ctx.Done():
+				h.Log(LogTypeClient, LogLevelDebug, "Unregister channel closed")
 				return
 			default:
 				h.mu.Lock()
@@ -138,13 +146,14 @@ func (h *Hub) Run(ctx context.Context) {
 					delete(h.Clients, client)
 					h.safeCloseClientChannel(client)
 					h.removeClientFromAllRoomsUnsafe(client)
-					fmt.Printf("Client unregistered: %s (total: %d)\n", client.ID, len(h.Clients))
+					h.Log(LogTypeClient, LogLevelDebug, "Client unregistered: %s", client.ID)
 				}
 				h.mu.Unlock()
 			}
 
 		case message, ok := <-h.Broadcast:
 			if !ok {
+				h.Log(LogTypeBroadcast, LogLevelDebug, "Broadcast channel closed")
 				return // channel closed, hub stopped
 			}
 
@@ -167,7 +176,7 @@ func (h *Hub) Run(ctx context.Context) {
 //
 // The Stop method is safe to call concurrently.
 func (h *Hub) Stop() {
-	fmt.Println("Hub stopping...")
+	h.Log(LogTypeOther, LogLevelInfo, "Hub stopping...")
 
 	h.mu.Lock()
 	if !h.running {
@@ -188,7 +197,7 @@ func (h *Hub) Stop() {
 	h.safeCloseChannel(h.Unregister)
 	h.safeCloseChannel(h.Broadcast)
 
-	fmt.Println("Hub stopped")
+	h.Log(LogTypeOther, LogLevelInfo, "Hub stopped")
 }
 
 // AddClient adds a client to the hub, and broadcasts the client to all other clients.
@@ -230,7 +239,7 @@ func (h *Hub) BroadcastToRoom(room string, message *Message) {
 
 	if exists {
 		h.broadcastToClients(message, clientsCopy)
-		fmt.Printf("Message broadcasted to room %s (%d clients)\n", room, len(clientsCopy))
+		h.Log(LogTypeBroadcast, LogLevelDebug, "Message broadcasted to room %s (%d clients)", room, len(clientsCopy))
 	}
 }
 
@@ -246,7 +255,7 @@ func (h *Hub) CreateRoom(name string) error {
 	h.mu.Lock()
 	if h.Rooms[name] == nil {
 		h.Rooms[name] = make(map[*Client]bool)
-		fmt.Printf("Room created: %s\n", name)
+		h.Log(LogTypeOther, LogLevelDebug, "Room created: %s", name)
 	}
 	h.mu.Unlock()
 
@@ -257,16 +266,18 @@ func (h *Hub) CreateRoom(name string) error {
 //
 // This method is safe to call concurrently.
 func (h *Hub) JoinRoom(client *Client, room string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	if h.Rooms[room] == nil {
-		h.Rooms[room] = make(map[*Client]bool)
-		fmt.Printf("Room created: %s\n", room)
+		err := h.CreateRoom(room)
+		if err != nil {
+			h.Log(LogTypeOther, LogLevelError, "Error creating room: %s", err)
+			return
+		}
 	}
 
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.Rooms[room][client] = true
-	fmt.Printf("Client %s joined room: %s\n", client.ID, room)
+	h.Log(LogTypeOther, LogLevelDebug, "Client %s joined room: %s", client.ID, room)
 }
 
 // LeaveRoom removes the given client from the given room. If the room does not exist, or if the client is not in the room, the method does nothing.
@@ -279,12 +290,15 @@ func (h *Hub) LeaveRoom(client *Client, room string) {
 	if roomClients, exists := h.Rooms[room]; exists {
 		if _, clientInRoom := roomClients[client]; clientInRoom {
 			delete(roomClients, client)
-			fmt.Printf("Client %s left room: %s\n", client.ID, room)
+			h.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, room)
 
 			// remove room if empty
 			if len(roomClients) == 0 {
-				delete(h.Rooms, room)
-				fmt.Printf("Room deleted (empty): %s\n", room)
+				h.Log(LogTypeOther, LogLevelDebug, "Room %s is empty, removing it", room)
+				err := h.DeleteRoom(room)
+				if err != nil {
+					h.Log(LogTypeOther, LogLevelError, "Error deleting room: %s", err)
+				}
 			}
 		}
 	}
@@ -380,7 +394,7 @@ func (h *Hub) DeleteRoom(name string) error {
 			delete(roomClients, client)
 		}
 		delete(h.Rooms, name)
-		fmt.Printf("Room deleted: %s\n", name)
+		h.Log(LogTypeOther, LogLevelDebug, "Room deleted: %s", name)
 		return nil
 	}
 
@@ -396,6 +410,17 @@ func (h *Hub) IsRunning() bool {
 	return h.running
 }
 
+func (h *Hub) Log(logType LogType, level LogLevel, msg string, args ...interface{}) {
+	lvl, ok := h.logger.Level[logType]
+	if !ok {
+		lvl = LogLevelNone
+	}
+
+	if level <= lvl {
+		h.logger.Logger.Log(logType, level, msg, args...)
+	}
+}
+
 // removeClientFromAllRoomsUnsafe removes the given client from all rooms it is currently in.
 // This method is unsafe to call concurrently, as it does not take any locks on the hub's rooms
 // map. It should only be called when the hub is not running, or when the hub is already locked
@@ -406,12 +431,12 @@ func (h *Hub) removeClientFromAllRoomsUnsafe(client *Client) {
 	for roomName, roomClients := range h.Rooms {
 		if _, clientInRoom := roomClients[client]; clientInRoom {
 			delete(roomClients, client)
-			fmt.Printf("Client %s left room: %s\n", client.ID, roomName)
+			h.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomName)
 
 			// remove room if empty
 			if len(roomClients) == 0 {
 				delete(h.Rooms, roomName)
-				fmt.Printf("Room deleted (empty): %s\n", roomName)
+				h.Log(LogTypeOther, LogLevelDebug, "Room %s is empty, removing it", roomName)
 			}
 		}
 	}
@@ -425,8 +450,7 @@ func (h *Hub) removeClientFromAllRoomsUnsafe(client *Client) {
 func (h *Hub) broadcastToClients(message *Message, clients map[*Client]bool) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("PANIC RECOVERED in broadcastToClients: %v\nStack trace:\n%s\n",
-				r, string(debug.Stack()))
+			h.Log(LogTypeBroadcast, LogLevelError, "PANIC RECOVERED in broadcastToClients: %v\nStack trace:\n%s\n", r, string(debug.Stack()))
 		}
 	}()
 
@@ -435,7 +459,7 @@ func (h *Hub) broadcastToClients(message *Message, clients map[*Client]bool) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("PANIC RECOVERED in JSON marshal during broadcast: %v\n", r)
+					h.Log(LogTypeBroadcast, LogLevelError, "PANIC RECOVERED in JSON marshal during broadcast: %v\n", r)
 					return
 				}
 			}()
@@ -456,8 +480,7 @@ func (h *Hub) broadcastToClients(message *Message, clients map[*Client]bool) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("PANIC RECOVERED sending to client %s: %v\n",
-						client.ID, r)
+					h.Log(LogTypeBroadcast, LogLevelError, "PANIC RECOVERED sending to client %s: %v\n", client.ID, r)
 					clientsToRemove = append(clientsToRemove, client)
 				}
 			}()
@@ -466,8 +489,7 @@ func (h *Hub) broadcastToClients(message *Message, clients map[*Client]bool) {
 			case client.MessageChan <- data:
 				// success
 			default:
-				fmt.Printf("Client %s channel full/closed, marking for removal\n",
-					client.ID)
+				h.Log(LogTypeBroadcast, LogLevelDebug, "Client %s channel full/closed, marking for removal", client.ID)
 				clientsToRemove = append(clientsToRemove, client)
 			}
 		}()
@@ -485,8 +507,7 @@ func (h *Hub) broadcastToClients(message *Message, clients map[*Client]bool) {
 func (h *Hub) safeCloseClientChannel(client *Client) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("PANIC RECOVERED closing channel for client %s: %v\n",
-				client.ID, r)
+			h.Log(LogTypeClient, LogLevelError, "PANIC RECOVERED closing channel for client %s: %v\n", client.ID, r)
 		}
 	}()
 
@@ -508,7 +529,7 @@ func (h *Hub) safeCloseClientChannel(client *Client) {
 func (h *Hub) safeCloseChannel(ch interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("Recovered from panic closing channel: %v\n", r)
+			h.Log(LogTypeError, LogLevelError, "PANIC RECOVERED closing channel: %v\n", r)
 		}
 	}()
 

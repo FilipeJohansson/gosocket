@@ -175,6 +175,10 @@ func (m *MockHub) IsRunning() bool {
 	return m.running
 }
 
+func (m *MockHub) Log(logType LogType, level LogLevel, format string, args ...interface{}) {
+	m.Called(logType, level, format, args)
+}
+
 func TestNewClient(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -187,7 +191,7 @@ func TestNewClient(t *testing.T) {
 			name: "creates client with valid parameters",
 			id:   "test-client-1",
 			conn: &MockWebSocketConn{},
-			hub:  NewHub(),
+			hub:  NewHub(DefaultLoggerConfig()),
 			expected: func(c *Client) {
 				assert.Equal(t, "test-client-1", c.ID)
 				assert.NotNil(t, c.Conn)
@@ -201,7 +205,7 @@ func TestNewClient(t *testing.T) {
 			name: "creates client with nil connection",
 			id:   "test-client-2",
 			conn: nil,
-			hub:  NewHub(),
+			hub:  NewHub(DefaultLoggerConfig()),
 			expected: func(c *Client) {
 				assert.Equal(t, "test-client-2", c.ID)
 				assert.Nil(t, c.Conn)
@@ -240,7 +244,7 @@ func TestClient_Send(t *testing.T) {
 		{
 			name: "sends message successfully",
 			setupClient: func() *Client {
-				return NewClient("test", &MockWebSocketConn{}, NewHub(), 256)
+				return NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 			},
 			message:         []byte("test message"),
 			isExpectedError: false,
@@ -248,7 +252,7 @@ func TestClient_Send(t *testing.T) {
 		{
 			name: "fails when connection is nil",
 			setupClient: func() *Client {
-				return NewClient("test", nil, NewHub(), 256)
+				return NewClient("test", nil, NewHub(DefaultLoggerConfig()), 256)
 			},
 			message:         []byte("test message"),
 			isExpectedError: true,
@@ -257,7 +261,7 @@ func TestClient_Send(t *testing.T) {
 		{
 			name: "fails when message channel is full",
 			setupClient: func() *Client {
-				client := NewClient("test", &MockWebSocketConn{}, NewHub(), 256)
+				client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 				// Fill the channel to capacity
 				for i := 0; i < cap(client.MessageChan); i++ {
 					client.MessageChan <- []byte("fill")
@@ -359,7 +363,7 @@ func TestClient_SendMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := NewClient("test", &MockWebSocketConn{}, NewHub(), 256)
+			client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 			err := client.SendMessage(tt.message)
 
 			if !tt.isExpectedError {
@@ -380,7 +384,7 @@ func TestClient_SendMessage(t *testing.T) {
 }
 
 func TestClient_SendData(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub(), 256)
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 
 	testData := map[string]interface{}{
 		"message": "hello",
@@ -441,7 +445,7 @@ func TestClient_SendDataWithEncoding(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := NewClient("test", &MockWebSocketConn{}, NewHub(), 256)
+			client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 			err := client.SendDataWithEncoding(tt.data, tt.encoding)
 
 			if !tt.isExpectedError {
@@ -476,7 +480,7 @@ func TestClient_SendJSON(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := NewClient("test", &MockWebSocketConn{}, NewHub(), 256)
+			client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 			err := client.SendJSON(tt.data)
 
 			if !tt.isExpectedError {
@@ -490,7 +494,7 @@ func TestClient_SendJSON(t *testing.T) {
 }
 
 func TestClient_SendProtobuf(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub(), 256)
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 	err := client.SendProtobuf("test data")
 
 	assert.Error(t, err)
@@ -611,7 +615,7 @@ func TestClient_GetRooms(t *testing.T) {
 		{
 			name: "returns rooms client is in",
 			setupClient: func() *Client {
-				hub := NewHub()
+				hub := NewHub(DefaultLoggerConfig())
 				client := NewClient("test", &MockWebSocketConn{}, hub, 256)
 
 				// Manually add client to rooms for testing
@@ -701,7 +705,7 @@ func TestClient_Disconnect(t *testing.T) {
 }
 
 func TestClient_SetUserData(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub(), 256)
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 
 	client.SetUserData("username", "john_doe")
 	client.SetUserData("age", 30)
@@ -713,7 +717,7 @@ func TestClient_SetUserData(t *testing.T) {
 }
 
 func TestClient_GetUserData(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub(), 256)
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 
 	// Set some test data
 	client.UserData["username"] = "john_doe"
@@ -737,7 +741,7 @@ func TestClient_GetUserData(t *testing.T) {
 }
 
 func TestClient_ConcurrentAccess(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub(), 256)
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 
 	// Test concurrent access to UserData
 	var wg sync.WaitGroup
@@ -779,13 +783,13 @@ func TestClient_ConcurrentAccess(t *testing.T) {
 	select {
 	case <-done:
 		// Test completed successfully
-	case <-time.After(5 * time.Second):
+	case <-time.After(100 * time.Millisecond):
 		t.Fatal("Test timed out - possible deadlock")
 	}
 }
 
 func TestClient_MessageChannelCapacity(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub(), 256)
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
 
 	// Verify channel capacity
 	assert.Equal(t, 256, cap(client.MessageChan))

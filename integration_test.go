@@ -373,7 +373,7 @@ func TestIntegration_UnexpectedDisconnect(t *testing.T) {
 		}
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	for i := 1; i < clientsCount; i++ {
 		clients[i].Close()
@@ -473,7 +473,7 @@ func TestIntegration_Reconnect(t *testing.T) {
 		require.NoError(t, ws1.WriteMessage(websocket.TextMessage, []byte(msg)))
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	_ = ws1.Close()
 	_ = ws2New.Close()
@@ -515,7 +515,7 @@ func TestIntegration_LargeMessages(t *testing.T) {
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, largePayload))
 	}
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	mu.Lock()
 	receivedCount := len(received)
@@ -582,7 +582,7 @@ func TestIntegration_LargeMessagesEcho(t *testing.T) {
 	// send messages with delays to avoid rate limiting
 	for i := 0; i < totalMessages; i++ {
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, largePayload))
-		time.Sleep(50 * time.Millisecond) // delay between large messages
+		time.Sleep(time.Millisecond) // delay between large messages
 	}
 	wg.Wait()
 
@@ -659,13 +659,13 @@ func TestIntegration_LargeMessagesConcurrent(t *testing.T) {
 			for j := 0; j < messagesPerClient; j++ {
 				err := conn.WriteMessage(websocket.TextMessage, largePayload)
 				require.NoError(t, err)
-				time.Sleep(200 * time.Millisecond)
+				time.Sleep(10 * time.Millisecond)
 			}
 		}(i, ws)
 	}
 	wg.Wait()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(200 * time.Millisecond)
 
 	expectedTotal := int32(clientCount * messagesPerClient)
 	require.Equal(t, expectedTotal, atomic.LoadInt32(&totalReceived))
@@ -743,10 +743,10 @@ func TestIntegration_LargeMessageBroadcast(t *testing.T) {
 
 	for i := 0; i < totalBroadcasts; i++ {
 		require.NoError(t, clients[0].WriteMessage(websocket.BinaryMessage, largePayload))
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(3 * time.Millisecond)
 	}
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(3 * time.Millisecond)
 
 	for _, ws := range clients {
 		ws.Close()
@@ -808,7 +808,7 @@ func TestIntegration_LargeMessagesWithFailures(t *testing.T) {
 
 	for i := 0; i < totalMessages; i++ {
 		require.NoError(t, ws.WriteMessage(websocket.BinaryMessage, largePayload))
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 	}
 
 	// abruptly close connection to simulate failure
@@ -821,10 +821,10 @@ func TestIntegration_LargeMessagesWithFailures(t *testing.T) {
 
 	for i := 0; i < totalMessages; i++ {
 		require.NoError(t, ws2.WriteMessage(websocket.BinaryMessage, largePayload))
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(time.Millisecond)
 	}
 
-	time.Sleep(1 * time.Second)
+	time.Sleep(time.Millisecond)
 
 	require.Greater(t, atomic.LoadInt32(&successCount), int32(0))
 }
@@ -887,17 +887,17 @@ func TestIntegration_ProgressiveMessageSizes(t *testing.T) {
 			payload[j] = byte(j % 256)
 		}
 
-		timeout := 5*time.Second + time.Duration(size/1024)*time.Millisecond
+		timeout := time.Millisecond + time.Duration(size/1024)*time.Millisecond
 		_ = ws.SetWriteDeadline(time.Now().Add(timeout))
 
 		err := ws.WriteMessage(websocket.BinaryMessage, payload)
 		require.NoError(t, err, "Failed to send message %d of size %d", i, size)
 
-		delay := 100*time.Millisecond + time.Duration(size/1024)*time.Millisecond
+		delay := time.Millisecond + time.Duration(size/1024)*time.Millisecond
 		time.Sleep(delay)
 	}
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(time.Millisecond)
 
 	require.Equal(t, int32(len(sizes)), atomic.LoadInt32(&receivedCount))
 
@@ -939,7 +939,7 @@ func TestIntegration_MessageOrder(t *testing.T) {
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(msg)))
 	}
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -1016,7 +1016,7 @@ func TestIntegration_BroadcastMessageOrder(t *testing.T) {
 		require.NoError(t, wsSender.WriteMessage(websocket.TextMessage, []byte(msg)))
 	}
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	_ = wsSender.Close()
 	_ = wsReceiver1.Close()
@@ -1109,7 +1109,7 @@ func TestIntegration_MultipleHubsIsolation(t *testing.T) {
 	require.NoError(t, wsHub1.WriteMessage(websocket.TextMessage, []byte("hub1-msg")))
 	require.NoError(t, wsHub2.WriteMessage(websocket.TextMessage, []byte("hub2-msg")))
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	_ = wsHub1.Close()
 	_ = wsHub2.Close()
@@ -1197,7 +1197,7 @@ func TestIntegration_RoomsIsolation(t *testing.T) {
 	require.NoError(t, ws1a.WriteMessage(websocket.TextMessage, []byte("hello-room1")))
 	require.NoError(t, ws2a.WriteMessage(websocket.TextMessage, []byte("hello-room2")))
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	_ = ws1a.Close()
 	_ = ws1b.Close()
@@ -1387,7 +1387,7 @@ func TestIntegration_MessageTypes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, binaryMsg, resp)
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -1447,7 +1447,7 @@ func TestIntegration_JSONMessages(t *testing.T) {
 	require.Equal(t, "processed: hello", respMsg.Data)
 	require.Equal(t, 123, respMsg.ID)
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 	mu.Lock()
 	require.Len(t, received, 1)
 	require.Equal(t, testMsg, received[0])
@@ -1495,7 +1495,7 @@ func TestIntegration_ErrorHandling(t *testing.T) {
 	defer ws.Close()
 
 	require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte("error")))
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte("normal")))
 	_, resp_msg, err := ws.ReadMessage()
@@ -1569,7 +1569,7 @@ func TestIntegration_MemoryLeaks(t *testing.T) {
 			ws.Close()
 		}
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 	}
 
 	// server should still be responsive
@@ -1609,13 +1609,13 @@ func TestIntegration_MemoryLeaksWithoutMessages(t *testing.T) {
 			clients = append(clients, ws)
 		}
 
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(time.Millisecond)
 
 		for _, ws := range clients {
 			ws.Close()
 		}
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(time.Millisecond)
 	}
 
 	// server should still be responsive after many connection cycles
@@ -1623,7 +1623,7 @@ func TestIntegration_MemoryLeaksWithoutMessages(t *testing.T) {
 	require.NoError(t, err)
 	defer ws.Close()
 
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(time.Millisecond)
 }
 
 func TestIntegration_CustomHeadersValidation(t *testing.T) {
@@ -1666,7 +1666,7 @@ func TestIntegration_CustomHeadersValidation(t *testing.T) {
 		require.Equal(t, "Bearer token123", receivedHeaders["Authorization"])
 		require.Equal(t, "user456", receivedHeaders["User-Id"])
 		require.Equal(t, "custom-value", receivedHeaders["Custom-Header"])
-	case <-time.After(5 * time.Second):
+	case <-time.After(2 * time.Millisecond):
 		t.Fatal("Timeout waiting for headers")
 	}
 }
@@ -1746,7 +1746,7 @@ func TestIntegration_MultipleClientsWithDifferentHeaders(t *testing.T) {
 		defer ws.Close()
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -1813,7 +1813,7 @@ func TestIntegration_IgnoredHeaders(t *testing.T) {
 		require.Empty(t, receivedHeaders["Custom-Header"])
 		require.Empty(t, receivedHeaders["Ignored-Header"])
 
-	case <-time.After(5 * time.Second):
+	case <-time.After(100 * time.Millisecond):
 		t.Fatal("Timeout waiting for headers")
 	}
 }
@@ -1920,26 +1920,26 @@ func TestIntegration_RoomEdgeCases(t *testing.T) {
 	// test joining rooms
 	require.NoError(t, ws1.WriteMessage(websocket.TextMessage, []byte("join:room1")))
 	require.NoError(t, ws2.WriteMessage(websocket.TextMessage, []byte("join:room2")))
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// test broadcasting to specific rooms
 	require.NoError(t, ws1.WriteMessage(websocket.TextMessage, []byte("broadcast:room1:hello-room1")))
 	require.NoError(t, ws2.WriteMessage(websocket.TextMessage, []byte("broadcast:room2:hello-room2")))
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// test joining same room
 	require.NoError(t, ws2.WriteMessage(websocket.TextMessage, []byte("join:room1")))
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	require.NoError(t, ws1.WriteMessage(websocket.TextMessage, []byte("broadcast:room1:both-should-receive")))
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// test leaving room
 	require.NoError(t, ws2.WriteMessage(websocket.TextMessage, []byte("leave:room1")))
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	require.NoError(t, ws1.WriteMessage(websocket.TextMessage, []byte("broadcast:room1:only-ws1-should-receive")))
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	ws1.Close()
 	ws2.Close()
@@ -1999,7 +1999,7 @@ func TestIntegration_ConnectionLimits(t *testing.T) {
 		client.Close()
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// should be able to connect again after cleanup
 	ws, _, err = websocket.DefaultDialer.Dial(u.String(), nil)

@@ -1009,7 +1009,7 @@ func TestServer_GetClients(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				hub := NewHub()
+				hub := NewHub(DefaultLoggerConfig())
 
 				// Add some mock clients
 				client1 := NewClient("client1", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
@@ -1051,7 +1051,7 @@ func TestServer_GetClient(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				hub := NewHub()
+				hub := NewHub(DefaultLoggerConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				hub.Clients = map[*Client]bool{client: true}
@@ -1069,7 +1069,7 @@ func TestServer_GetClient(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				hub := NewHub()
+				hub := NewHub(DefaultLoggerConfig())
 				server.handler.SetHub(hub)
 				return server
 			},
@@ -1118,7 +1118,7 @@ func TestServer_GetClientCount(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				hub := NewHub()
+				hub := NewHub(DefaultLoggerConfig())
 
 				// Add some mock clients
 				client1 := NewClient("client1", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
@@ -1278,7 +1278,7 @@ func TestServer_GetRooms(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				hub := NewHub()
+				hub := NewHub(DefaultLoggerConfig())
 
 				// Create some rooms
 				hub.Rooms = map[string]map[*Client]bool{
@@ -1321,7 +1321,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				hub := NewHub()
+				hub := NewHub(DefaultLoggerConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				hub.Clients = map[*Client]bool{client: true}
@@ -1341,7 +1341,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				hub := NewHub()
+				hub := NewHub(DefaultLoggerConfig())
 				server.handler.SetHub(hub)
 				return server
 			},
@@ -1358,7 +1358,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				hub := NewHub()
+				hub := NewHub(DefaultLoggerConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				hub.Clients = map[*Client]bool{client: true}
@@ -1378,7 +1378,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				hub := NewHub()
+				hub := NewHub(DefaultLoggerConfig())
 				server.handler.SetHub(hub)
 				return server
 			},

@@ -7,6 +7,18 @@ import (
 	"time"
 )
 
+type LoggerConfig struct {
+	Logger Logger
+	Level  map[LogType]LogLevel
+}
+
+func DefaultLoggerConfig() *LoggerConfig {
+	return &LoggerConfig{
+		Logger: &NullLogger{},
+		Level:  make(map[LogType]LogLevel),
+	}
+}
+
 type RateLimiterConfig struct {
 	// PerClientRate is requests/msgs per second allowed per client.
 	PerClientRate float64

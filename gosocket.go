@@ -304,6 +304,16 @@ func WithRateLimit(config RateLimiterConfig) UniversalOption {
 	}
 }
 
+func WithLogger(logger Logger, levels map[LogType]LogLevel) UniversalOption {
+	return func(h HasHandler) error {
+		h.Handler().logger = &LoggerConfig{
+			Logger: logger,
+			Level:  levels,
+		}
+		return nil
+	}
+}
+
 // ===== EVENTS HANDLERS =====
 
 func OnBeforeConnect(handler OnBeforeConnectFunc) UniversalOption {

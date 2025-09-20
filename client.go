@@ -6,7 +6,6 @@ package gosocket
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sync"
 )
 
@@ -104,13 +103,14 @@ func NewClient(id string, conn IWebSocketConn, hub IHub, messageChanBufSize int)
 func (c *Client) Send(message []byte) error {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("PANIC RECOVERED in Client.Send (ID: %s): %v\n", c.ID, r)
+			c.Hub.Log(LogTypeClient, LogLevelError, "PANIC RECOVERED in Client.Send (ID: %s): %v", c.ID, r)
 		}
 	}()
 
 	c.mu.Lock()
 	if c.Conn == nil {
 		c.mu.Unlock()
+		c.Hub.Log(LogTypeClient, LogLevelError, "Client.Send (ID: %s): Connection is nil", c.ID)
 		return ErrClientConnNil
 	}
 	c.mu.Unlock()
@@ -119,6 +119,7 @@ func (c *Client) Send(message []byte) error {
 	case c.MessageChan <- message:
 		return nil
 	default:
+		c.Hub.Log(LogTypeClient, LogLevelError, "Client.Send (ID: %s): Message channel is full", c.ID)
 		safeGoroutine("Client.Disconnect", func() {
 			_ = c.Disconnect()
 		})
@@ -145,6 +146,7 @@ func (c *Client) SendMessage(message *Message) error {
 	if message.Data != nil {
 		// JSON fallback
 		if message.Encoding == 0 {
+			c.Hub.Log(LogTypeClient, LogLevelDebug, "Client.SendMessage (ID: %s): Encoding not specified, assuming JSON", c.ID)
 			message.Encoding = JSON
 		}
 
@@ -157,6 +159,7 @@ func (c *Client) SendMessage(message *Message) error {
 			}
 			return ErrRawEncoding
 		default:
+			c.Hub.Log(LogTypeClient, LogLevelError, "Client.SendMessage (ID: %s): Unsupported encoding: %s", c.ID, message.Encoding)
 			return newUnsupportedEncodingError(message.Encoding)
 		}
 	}
@@ -191,6 +194,7 @@ func (c *Client) SendDataWithEncoding(data interface{}, encoding EncodingType) e
 		}
 		return ErrRawEncoding
 	default:
+		c.Hub.Log(LogTypeClient, LogLevelError, "Client.SendDataWithEncoding (ID: %s): Unsupported encoding: %s", c.ID, encoding)
 		return newUnsupportedEncodingError(encoding)
 	}
 }

@@ -135,8 +135,7 @@ func NewServer(options ...UniversalOption) (*Server, error) {
 func (s *Server) Start() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("PANIC RECOVERED in Server.Start: %v\nStack trace:\n%s\n",
-				r, string(debug.Stack()))
+			s.handler.log(LogTypeError, LogLevelError, "PANIC RECOVERED in Server.Start: %v\nStack trace:\n%s\n", r, string(debug.Stack()))
 			err = fmt.Errorf("server start panic: %v", r)
 		}
 
@@ -152,6 +151,7 @@ func (s *Server) Start() (err error) {
 	}
 
 	if len(s.handler.Serializers()) <= 0 {
+		s.handler.log(LogTypeServer, LogLevelDebug, "No serializers configured, using JSON as default serializer")
 		s.handler.AddSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig())) // JSON as default serializer
 	}
 
@@ -185,8 +185,9 @@ func (s *Server) Start() (err error) {
 		}
 	}()
 
-	fmt.Printf("GoSocket server starting on port %d, path %s\n", s.config.Port, s.config.Path)
+	s.handler.log(LogTypeServer, LogLevelInfo, "Starting GoSocket server on port %d, path %s", s.config.Port, s.config.Path)
 	if s.config.EnableSSL {
+		s.handler.log(LogTypeServer, LogLevelInfo, "SSL enabled")
 		s.server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		err = s.server.ListenAndServeTLS(s.config.CertFile, s.config.KeyFile)
 	} else {
@@ -194,7 +195,7 @@ func (s *Server) Start() (err error) {
 	}
 
 	if errors.Is(err, http.ErrServerClosed) {
-		fmt.Println("GoSocket server stopped gracefully")
+		s.handler.log(LogTypeServer, LogLevelInfo, "GoSocket server stopped gracefully")
 		return nil
 	}
 
@@ -223,6 +224,7 @@ func (s *Server) StartWithContext(ctx context.Context) (err error) {
 	}
 
 	if len(s.handler.Serializers()) <= 0 {
+		s.handler.log(LogTypeServer, LogLevelDebug, "No serializers configured, using JSON as default serializer")
 		s.handler.AddSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig())) // JSON as default serializer
 	}
 
@@ -246,9 +248,10 @@ func (s *Server) StartWithContext(ctx context.Context) (err error) {
 	go func() {
 		defer close(errChan)
 
-		fmt.Printf("GoSocket server starting on port %d, path %s\n", s.config.Port, s.config.Path)
+		s.handler.log(LogTypeServer, LogLevelInfo, "Starting GoSocket server on port %d, path %s", s.config.Port, s.config.Path)
 		var serverErr error
 		if s.config.EnableSSL {
+			s.handler.log(LogTypeServer, LogLevelInfo, "SSL enabled")
 			s.server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 			serverErr = s.server.ListenAndServeTLS(s.config.CertFile, s.config.KeyFile)
 		} else {
@@ -290,6 +293,7 @@ func (s *Server) Stop() error {
 		s.handler.Hub().Stop()
 	}
 
+	s.handler.log(LogTypeServer, LogLevelInfo, "Stopping GoSocket server")
 	return s.server.Close()
 }
 
@@ -314,6 +318,7 @@ func (s *Server) StopGracefully(timeout time.Duration) error {
 		s.handler.Hub().Stop()
 	}
 
+	s.handler.log(LogTypeServer, LogLevelInfo, "Stopping GoSocket server gracefully")
 	return srv.Shutdown(ctx)
 }
 
@@ -324,6 +329,7 @@ func (s *Server) StopGracefully(timeout time.Duration) error {
 func (s *Server) With(options ...UniversalOption) (*Server, error) {
 	for _, o := range options {
 		if err := o(s); err != nil {
+			s.handler.log(LogTypeServer, LogLevelError, "Failed to apply option: %s", err.Error())
 			return nil, err
 		}
 	}
@@ -657,8 +663,11 @@ func (s *Server) performGracefulShutdown(timeout time.Duration, hubCancel contex
 		defer cancel()
 
 		if err := s.server.Shutdown(shutdownCtx); err != nil {
+			s.handler.log(LogTypeError, LogLevelError, "error shutting down server: %v\n", err)
 			_ = s.server.Close()
 		}
+
+		s.handler.log(LogTypeServer, LogLevelInfo, "server shutdown")
 	}
 }
 
