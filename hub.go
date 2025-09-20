@@ -430,13 +430,6 @@ func (h *Hub) broadcastToClients(message *Message, clients map[*Client]bool) {
 		}
 	}()
 
-	h.mu.RLock()
-	clientsCopy := make([]*Client, 0, len(h.Clients))
-	for c := range h.Clients {
-		clientsCopy = append(clientsCopy, c)
-	}
-	h.mu.RUnlock()
-
 	data := message.RawData
 	if data == nil && message.Data != nil {
 		func() {
@@ -459,7 +452,7 @@ func (h *Hub) broadcastToClients(message *Message, clients map[*Client]bool) {
 	}
 
 	var clientsToRemove []*Client
-	for _, client := range clientsCopy {
+	for client := range clients {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
