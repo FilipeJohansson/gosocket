@@ -501,8 +501,7 @@ func (s *Server) GetClients() []*Client {
 // GetClient returns a client by its ID. If no client with the given ID exists,
 // nil is returned. This method is safe to call concurrently.
 func (s *Server) GetClient(id string) *Client {
-	clients := s.GetClients()
-	for _, client := range clients {
+	for client := range s.handler.Hub().GetClients() {
 		if client.ID == id {
 			return client
 		}
