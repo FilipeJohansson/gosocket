@@ -551,7 +551,7 @@ func extractHeaders(r *http.Request) map[string]string {
 	headers := make(map[string]string)
 
 	// common headers that might be useful in handlers
-	relevantHeaders := []string{
+	relevantHeaders := []string{ // TODO: make configurable
 		"Authorization",
 		"X-Forwarded-For",
 		"X-Real-Ip",

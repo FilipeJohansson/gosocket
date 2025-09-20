@@ -1,4 +1,4 @@
-# 🚀 GoSocket
+# GoSocket
 
 *The simplest way to add WebSockets to your Go application*
 
