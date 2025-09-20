@@ -280,6 +280,14 @@ func WithMaxBinarySize(size int64) UniversalOption {
 	}
 }
 
+func WithRelevantHeaders(headers []string) UniversalOption {
+	return func(h HasHandler) error {
+		handler := h.Handler()
+		handler.config.RelevantHeaders = headers
+		return nil
+	}
+}
+
 func WithMessageBufferSize(size int) UniversalOption {
 	return func(h HasHandler) error {
 		handler := h.Handler()

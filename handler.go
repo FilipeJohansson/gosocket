@@ -547,7 +547,7 @@ func (h *Handler) cleanupClient(client *Client) {
 // headers are considered: Authorization, X-Forwarded-For, X-Real-IP,
 // Accept, Accept-Language, and Accept-Encoding. If a header is not
 // present in the request, it is not included in the returned map.
-func extractHeaders(r *http.Request) map[string]string {
+func extractHeaders(r *http.Request, extraHeaders ...string) map[string]string {
 	headers := make(map[string]string)
 
 	// common headers that might be useful in handlers
@@ -559,6 +559,7 @@ func extractHeaders(r *http.Request) map[string]string {
 		"Accept-Language",
 		"Accept-Encoding",
 	}
+	relevantHeaders = append(relevantHeaders, extraHeaders...)
 
 	for _, header := range relevantHeaders {
 		if value := r.Header.Get(header); value != "" {

@@ -761,13 +761,13 @@ func TestMultipleHubsIsolation(t *testing.T) {
 	require.NotContains(t, receivedHub2, "hub1-msg")
 }
 
-// TODO: uncomment this test once extractHeaders is configurable
-/* func TestRoomsIsolation(t *testing.T) {
+func TestRoomsIsolation(t *testing.T) {
 	var mu sync.Mutex
 	received := make(map[string][]string)
 
 	server, err := NewServer(
 		WithPath("/ws"),
+		WithRelevantHeaders([]string{"Room"}),
 		OnConnect(func(c *Client, ctx *Context) error {
 			c.Hub.JoinRoom(c, ctx.connInfo.Headers["Room"])
 			return nil
@@ -783,8 +783,8 @@ func TestMultipleHubsIsolation(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	server.CreateRoom("room1")
-	server.CreateRoom("room2")
+	_ = server.CreateRoom("room1")
+	_ = server.CreateRoom("room2")
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -853,7 +853,7 @@ func TestMultipleHubsIsolation(t *testing.T) {
 	require.Contains(t, received["r2b"], "hello-room2")
 	require.NotContains(t, received["r2a"], "hello-room1")
 	require.NotContains(t, received["r2b"], "hello-room1")
-} */
+}
 
 // TODO: uncomment this test once rate limiter is implemented
 /* func TestRateLimiting(t *testing.T) {

@@ -20,15 +20,16 @@ type SerializationConfig struct {
 
 type HandlerConfig struct {
 	MaxConnections     int
+	MessageChanBufSize int
 	MessageSize        int64
 	ReadTimeout        time.Duration
 	WriteTimeout       time.Duration
 	PingPeriod         time.Duration
 	PongWait           time.Duration
 	AllowedOrigins     []string
+	RelevantHeaders    []string
 	DefaultEncoding    EncodingType // default message encoding
 	Serialization      SerializationConfig
-	MessageChanBufSize int
 }
 
 type ServerConfig struct {

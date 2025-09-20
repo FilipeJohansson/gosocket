@@ -49,7 +49,7 @@ func NewHandlerContextFromRequest(handler *Handler, r *http.Request) *Context {
 			ClientIP:  getClientIPFromRequest(r),
 			UserAgent: r.Header.Get("User-Agent"),
 			Origin:    r.Header.Get("Origin"),
-			Headers:   extractHeaders(r),
+			Headers:   extractHeaders(r, handler.config.RelevantHeaders...),
 			RequestID: generateRequestID(),
 		},
 	}
