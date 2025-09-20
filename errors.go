@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025 Filipe Johansson
+
 package gosocket
 
 import (
@@ -63,6 +66,10 @@ var (
 	ErrDataTooLong             = errors.New("data too long")
 	ErrInvalidJSON             = errors.New("invalid JSON")
 	ErrInvalidStruct           = errors.New("invalid struct")
+
+	// Connection Pool errors
+	ErrMaxConnReached      = errors.New("max connections reached")
+	ErrMaxConnPerIpReached = errors.New("max connections per IP reached")
 
 	// Encoding errors
 	ErrRawEncoding         = errors.New("raw encoding expects []byte data")
@@ -159,4 +166,8 @@ func newInvalidStructError(err error) error {
 
 func newDataTooLongError(val int) error {
 	return fmt.Errorf("%w: %d", ErrDataTooLong, val)
+}
+
+func newMaxConnPerIpReachedError(ip string) error {
+	return fmt.Errorf("%w: %s", ErrMaxConnPerIpReached, ip)
 }

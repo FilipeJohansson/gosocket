@@ -49,13 +49,15 @@ type Handler struct {
 	events      *Events
 	serializers map[EncodingType]Serializer
 	authFunc    AuthFunc
+
 	upgrader    websocket.Upgrader
 	hubRunning  sync.Once
 	middlewares []Middleware
 	mu          sync.RWMutex
 
-	logger      *LoggerConfig
-	rateLimiter *RateLimiterManager
+	connectionPool *ConnectionPool
+	logger         *LoggerConfig
+	rateLimiter    *RateLimiterManager
 }
 
 // NewHandler returns a new instance of Handler with default configuration.
@@ -86,6 +88,8 @@ func NewHandler(options ...UniversalOption) (*Handler, error) {
 			return nil, err
 		}
 	}
+
+	h.initConnectionPool()
 
 	return h, nil
 }
@@ -178,12 +182,30 @@ func (h *Handler) ApplyMiddlewares(handler http.Handler) http.Handler {
 //
 // This method is safe to call concurrently.
 func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	if h.config.ConnectionTimeout > 0 {
+		ctx, cancel := context.WithTimeout(r.Context(), h.config.ConnectionTimeout)
+		defer cancel()
+		r = r.WithContext(ctx)
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			h.log(LogTypeError, LogLevelError, "PANIC RECOVERED in HandleWebSocket: %v\nStack trace:\n%s\n", r, string(debug.Stack()))
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		}
 	}()
+
+	clientIP := getClientIPFromRequest(r)
+
+	if h.connectionPool != nil {
+		if err := h.connectionPool.AcquireConnection(clientIP); err != nil {
+			h.log(LogTypeConnection, LogLevelWarn, "Connection rejected for %s: %v", clientIP, err)
+			http.Error(w, "Too many connections", http.StatusTooManyRequests)
+			return
+		}
+
+		defer h.connectionPool.ReleaseConnection(clientIP)
+	}
 
 	if h.upgrader.CheckOrigin == nil {
 		h.upgrader.CheckOrigin = func(r *http.Request) bool {
@@ -214,7 +236,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	handlerCtx := NewHandlerContextFromRequest(h, r)
-	handlerCtx.connInfo.ClientIP = getClientIPFromRequest(r)
+	handlerCtx.connInfo.ClientIP = clientIP
 	handlerCtx.connInfo.RequestID = generateRequestID()
 
 	if !h.rateLimiter.AllowIP(r.RemoteAddr) {
@@ -290,6 +312,13 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	safeGoroutine("ClientRead", func() {
 		h.handleClientReadWithContext(client, handlerCtx)
 	})
+}
+
+func (h *Handler) GetConnectionStats() (int, map[string]int) {
+	if h.connectionPool == nil {
+		return 0, nil
+	}
+	return h.connectionPool.GetStats()
 }
 
 func (h *Handler) handleClientWriteWithContext(client *Client, handlerCtx *Context) {
@@ -597,6 +626,20 @@ func (h *Handler) processMessage(client *Client, message *Message) {
 		}
 	}
 	// TODO: add Protobuf and other formats
+}
+
+func (h *Handler) initConnectionPool() {
+	if h.config.MaxConnections > 0 {
+		h.connectionPool = NewConnectionPool(
+			h.config.MaxConnections,
+			h.config.MaxConnectionsPerIP,
+		)
+		h.log(LogTypeConnection, LogLevelInfo,
+			"Connection pool initialized: max_total=%d, max_per_ip=%d",
+			h.config.MaxConnections, h.config.MaxConnectionsPerIP)
+	} else {
+		h.log(LogTypeConnection, LogLevelWarn, "Connection pool disabled: MaxConnections is 0")
+	}
 }
 
 // ensureHubRunning starts the hub if it is not already running.

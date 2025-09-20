@@ -74,30 +74,34 @@ func DefaultSerializerConfig() SerializationConfig {
 }
 
 type HandlerConfig struct {
-	MaxConnections     int
-	MessageChanBufSize int
-	MessageSize        int64
-	ReadTimeout        time.Duration
-	WriteTimeout       time.Duration
-	PingPeriod         time.Duration
-	PongWait           time.Duration
-	AllowedOrigins     []string
-	RelevantHeaders    []string
-	DefaultEncoding    EncodingType // default message encoding
-	Serialization      SerializationConfig
+	MaxConnections      int
+	MaxConnectionsPerIP int
+	MessageChanBufSize  int
+	MessageSize         int64
+	ReadTimeout         time.Duration
+	WriteTimeout        time.Duration
+	PingPeriod          time.Duration
+	PongWait            time.Duration
+	ConnectionTimeout   time.Duration
+	AllowedOrigins      []string
+	RelevantHeaders     []string
+	DefaultEncoding     EncodingType // default message encoding
+	Serialization       SerializationConfig
 }
 
 func DefaultHandlerConfig() *HandlerConfig {
 	return &HandlerConfig{
-		MaxConnections:     1000,
-		MessageSize:        512 * 1024,
-		ReadTimeout:        60 * time.Second,
-		WriteTimeout:       10 * time.Second,
-		PingPeriod:         54 * time.Second,
-		PongWait:           60 * time.Second,
-		DefaultEncoding:    JSON,
-		Serialization:      DefaultSerializerConfig(),
-		MessageChanBufSize: 256,
+		MaxConnections:      1000,
+		MaxConnectionsPerIP: 10,
+		MessageSize:         512 * 1024,
+		ReadTimeout:         60 * time.Second,
+		WriteTimeout:        10 * time.Second,
+		PingPeriod:          54 * time.Second,
+		PongWait:            60 * time.Second,
+		ConnectionTimeout:   300 * time.Second,
+		DefaultEncoding:     JSON,
+		Serialization:       DefaultSerializerConfig(),
+		MessageChanBufSize:  256,
 	}
 }
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025 Filipe Johansson
+
 package gosocket
 
 import "fmt"
@@ -21,6 +24,7 @@ type LogLevel int
 const (
 	LogLevelNone LogLevel = iota
 	LogLevelError
+	LogLevelWarn
 	LogLevelInfo
 	LogLevelDebug
 )
