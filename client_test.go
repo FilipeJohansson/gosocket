@@ -36,8 +36,8 @@ func (m *MockWebSocketConn) ReadMessage() (messageType int, p []byte, err error)
 // MockHub implements a mock Hub for testing
 type MockHub struct {
 	mock.Mock
-	Clients    map[*Client]bool
-	Rooms      map[string]map[*Client]bool
+	Clients    *SharedCollection[*Client]
+	Rooms      *SharedCollection[*Room]
 	Register   chan *Client
 	Unregister chan *Client
 	Broadcast  chan *Message
@@ -47,7 +47,8 @@ type MockHub struct {
 
 func NewMockHub() *MockHub {
 	return &MockHub{
-		Rooms: make(map[string]map[*Client]bool),
+		Clients: NewSharedCollection[*Client](),
+		Rooms:   NewSharedCollection[*Room](),
 	}
 }
 
@@ -71,58 +72,75 @@ func (m *MockHub) BroadcastMessage(message *Message) {
 	m.Called(message)
 }
 
-func (m *MockHub) BroadcastToRoom(room string, message *Message) {
-	m.Called(room, message)
+func (m *MockHub) BroadcastToRoom(roomName string, message *Message) {
+	m.Called(roomName, message)
 }
 
-func (m *MockHub) CreateRoom(name string) error {
-	m.Called(name)
-	if name == "" {
-		return ErrRoomNameEmpty
+func (m *MockHub) CreateRoom(ownerId, roomName string) (*Room, error) {
+	m.Called(ownerId, roomName)
+	if roomName == "" {
+		return nil, ErrRoomNameEmpty
 	}
 
-	m.mu.Lock()
-	if m.Rooms[name] == nil {
-		m.Rooms[name] = make(map[*Client]bool)
+	if _, exists := m.Rooms.GetByStringId(roomName); exists {
+		return nil, ErrRoomAlreadyExists
 	}
+
+	room := NewRoom(ownerId, roomName)
+	m.mu.Lock()
+	m.Rooms.AddWithStringId(room, roomName)
 	m.mu.Unlock()
+	m.Log(LogTypeOther, LogLevelDebug, "Room created: %s", roomName)
 
-	return nil
+	return room, nil
 }
 
-func (m *MockHub) JoinRoom(client *Client, room string) {
-	m.Called(client, room)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.Rooms[room] == nil {
-		m.Rooms[room] = make(map[*Client]bool)
+func (m *MockHub) JoinRoom(client *Client, roomName string) {
+	m.Called(client, roomName)
+	if _, exists := m.Rooms.GetByStringId(roomName); !exists {
+		_, err := m.CreateRoom(client.ID, roomName)
+		if err != nil {
+			m.Log(LogTypeOther, LogLevelError, "Error creating room: %s", err)
+			return
+		}
 	}
-	m.Rooms[room][client] = true
+
+	room, found := m.Rooms.GetByStringId(roomName)
+	if !found {
+		m.Log(LogTypeOther, LogLevelError, "Room not found: %s", roomName)
+		return
+	}
+
+	room.Clients.AddWithStringId(client, client.ID)
+	m.Log(LogTypeOther, LogLevelDebug, "Client %s joined room: %s", client.ID, roomName)
 }
 
-func (m *MockHub) LeaveRoom(client *Client, room string) {
-	m.Called(client, room)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if roomClients, exists := m.Rooms[room]; exists {
-		delete(roomClients, client)
-		if len(roomClients) == 0 {
-			delete(m.Rooms, room)
+func (m *MockHub) LeaveRoom(client *Client, roomName string) {
+	m.Called(client, roomName)
+	if room, exists := m.Rooms.GetByStringId(roomName); exists {
+		if room.Clients.RemoveByStringId(client.ID) {
+			m.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomName)
+
+			// remove room if empty
+			if room.Clients.Len() == 0 {
+				m.Log(LogTypeOther, LogLevelDebug, "Room %s is empty, removing it", roomName)
+				err := m.DeleteRoom(roomName)
+				if err != nil {
+					m.Log(LogTypeOther, LogLevelError, "Error deleting room: %s", err)
+				}
+			}
 		}
 	}
 }
 
-func (m *MockHub) GetRoomClients(room string) []*Client {
-	m.Called(room)
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	clients := []*Client{}
-	if roomClients, exists := m.Rooms[room]; exists {
-		for client := range roomClients {
-			clients = append(clients, client)
-		}
+func (m *MockHub) GetRoomClients(roomName string) []*Client {
+	m.Called(roomName)
+	room, exists := m.Rooms.GetByStringId(roomName)
+	if !exists {
+		return []*Client{}
 	}
-	return clients
+
+	return room.Clients.GetAll()
 }
 
 func (m *MockHub) GetStats() map[string]interface{} {
@@ -130,45 +148,45 @@ func (m *MockHub) GetStats() map[string]interface{} {
 	return args.Get(0).(map[string]interface{})
 }
 
-func (m *MockHub) GetClients() map[*Client]bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	clientsCopy := make(map[*Client]bool)
-	for client, value := range m.Clients {
-		clientsCopy[client] = value
-	}
-	return clientsCopy
+func (m *MockHub) GetClients() []*Client {
+	m.Called()
+	return m.Clients.GetAll()
 }
 
-func (m *MockHub) GetRooms() map[string]map[*Client]bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	roomsCopy := make(map[string]map[*Client]bool)
-	for room, clients := range m.Rooms {
-		clientsCopy := make(map[*Client]bool)
-		for client, value := range clients {
-			clientsCopy[client] = value
-		}
-		roomsCopy[room] = clientsCopy
-	}
-	return roomsCopy
+func (m *MockHub) GetRooms() []*Room {
+	m.Called()
+	return m.Rooms.GetAll()
 }
 
-func (m *MockHub) DeleteRoom(name string) error {
-	m.Called(name)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if roomClients, exists := m.Rooms[name]; exists {
-		// first, remove all clients from the room
-		for client := range roomClients {
-			delete(roomClients, client)
-		}
-		delete(m.Rooms, name)
+func (m *MockHub) GetRoom(roomName string) *Room {
+	m.Called(roomName)
+	room, exists := m.Rooms.GetByStringId(roomName)
+	if !exists {
 		return nil
 	}
+	return room
+}
 
-	return fmt.Errorf("room not found: %s", name)
+func (m *MockHub) DeleteRoom(roomName string) error {
+	m.Called(roomName)
+	room, exists := m.Rooms.GetByStringId(roomName)
+	if !exists {
+		return newRoomNotFoundError(roomName)
+	}
+
+	var clientsToRemove []*Client
+	room.Clients.ForEach(func(id uint64, client *Client) {
+		clientsToRemove = append(clientsToRemove, client)
+	})
+
+	for _, client := range clientsToRemove {
+		room.Clients.RemoveByStringId(client.ID)
+		m.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomName)
+	}
+
+	m.Rooms.RemoveByStringId(roomName)
+	m.Log(LogTypeOther, LogLevelDebug, "Room deleted: %s", roomName)
+	return nil
 }
 
 func (m *MockHub) IsRunning() bool {
@@ -514,6 +532,8 @@ func TestClient_JoinRoom(t *testing.T) {
 			setupClient: func() *Client {
 				mockHub := NewMockHub()
 				mockHub.On("JoinRoom", mock.AnythingOfType("*gosocket.Client"), "test-room")
+				mockHub.On("CreateRoom", mock.AnythingOfType("string"), "test-room")
+				mockHub.On("Log", mock.AnythingOfType("LogType"), mock.AnythingOfType("LogLevel"), mock.AnythingOfType("string"), mock.AnythingOfType("[]interface {}"))
 				client := NewClient("test", &MockWebSocketConn{}, nil, 256)
 				client.Hub = mockHub // Type assertion bypass for testing
 				return client
@@ -619,11 +639,9 @@ func TestClient_GetRooms(t *testing.T) {
 				client := NewClient("test", &MockWebSocketConn{}, hub, 256)
 
 				// Manually add client to rooms for testing
-				hub.mu.Lock()
-				hub.Rooms["room1"] = map[*Client]bool{client: true}
-				hub.Rooms["room2"] = map[*Client]bool{client: true}
-				hub.Rooms["room3"] = map[*Client]bool{} // Client not in this room
-				hub.mu.Unlock()
+				hub.JoinRoom(client, "room1")
+				hub.JoinRoom(client, "room2")
+				_, _ = hub.CreateRoom("__SERVER__", "room3")
 
 				return client
 			},

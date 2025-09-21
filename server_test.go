@@ -1015,10 +1015,8 @@ func TestServer_GetClients(t *testing.T) {
 				client1 := NewClient("client1", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				client2 := NewClient("client2", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 
-				hub.Clients = map[*Client]bool{
-					client1: true,
-					client2: true,
-				}
+				hub.Clients.AddWithStringId(client1, client1.ID)
+				hub.Clients.AddWithStringId(client2, client2.ID)
 
 				server.handler.SetHub(hub)
 				return server
@@ -1054,7 +1052,7 @@ func TestServer_GetClient(t *testing.T) {
 				hub := NewHub(DefaultLoggerConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
-				hub.Clients = map[*Client]bool{client: true}
+				hub.Clients.AddWithStringId(client, client.ID)
 
 				server.handler.SetHub(hub)
 				return server
@@ -1125,11 +1123,9 @@ func TestServer_GetClientCount(t *testing.T) {
 				client2 := NewClient("client2", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				client3 := NewClient("client3", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 
-				hub.Clients = map[*Client]bool{
-					client1: true,
-					client2: true,
-					client3: true,
-				}
+				hub.Clients.AddWithStringId(client1, client1.ID)
+				hub.Clients.AddWithStringId(client2, client2.ID)
+				hub.Clients.AddWithStringId(client3, client3.ID)
 
 				server.handler.SetHub(hub)
 				return server
@@ -1165,7 +1161,8 @@ func TestServer_RoomManagement(t *testing.T) {
 					t.Fatal(err)
 				}
 				mockHub := NewMockHub()
-				mockHub.On("CreateRoom", "test-room").Return(nil)
+				mockHub.On("CreateRoom", mock.AnythingOfType("string"), "test-room")
+				mockHub.On("Log", mock.AnythingOfType("LogType"), mock.AnythingOfType("LogLevel"), mock.AnythingOfType("string"), mock.AnythingOfType("[]interface {}"))
 				server.handler.SetHub(mockHub)
 				return server
 			},
@@ -1181,7 +1178,7 @@ func TestServer_RoomManagement(t *testing.T) {
 					t.Fatal(err)
 				}
 				mockHub := NewMockHub()
-				mockHub.On("CreateRoom", "").Return(ErrRoomNameEmpty)
+				mockHub.On("CreateRoom", mock.AnythingOfType("string"), "").Return(ErrRoomNameEmpty)
 				server.handler.SetHub(mockHub)
 				return server
 			},
@@ -1198,10 +1195,11 @@ func TestServer_RoomManagement(t *testing.T) {
 					t.Fatal(err)
 				}
 				mockHub := NewMockHub()
-				mockHub.On("CreateRoom", "test-room").Return(nil)
+				mockHub.On("CreateRoom", mock.AnythingOfType("string"), "test-room").Return(nil)
 				mockHub.On("DeleteRoom", "test-room").Return(nil)
+				mockHub.On("Log", mock.AnythingOfType("LogType"), mock.AnythingOfType("LogLevel"), mock.AnythingOfType("string"), mock.AnythingOfType("[]interface {}"))
 				server.handler.SetHub(mockHub)
-				_ = server.CreateRoom("test-room")
+				_, _ = server.CreateRoom("test-room")
 				return server
 			},
 			operation:       "delete",
@@ -1234,7 +1232,7 @@ func TestServer_RoomManagement(t *testing.T) {
 			var err error
 			switch tt.operation {
 			case "create":
-				err = server.CreateRoom(tt.roomName)
+				_, err = server.CreateRoom(tt.roomName)
 			case "delete":
 				err = server.DeleteRoom(tt.roomName)
 			}
@@ -1278,16 +1276,11 @@ func TestServer_GetRooms(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				hub := NewHub(DefaultLoggerConfig())
 
-				// Create some rooms
-				hub.Rooms = map[string]map[*Client]bool{
-					"room1": {},
-					"room2": {},
-					"room3": {},
-				}
+				_, _ = server.CreateRoom("room1")
+				_, _ = server.CreateRoom("room2")
+				_, _ = server.CreateRoom("room3")
 
-				server.handler.SetHub(hub)
 				return server
 			},
 			expected: []string{"room1", "room2", "room3"},
@@ -1324,7 +1317,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				hub := NewHub(DefaultLoggerConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
-				hub.Clients = map[*Client]bool{client: true}
+				hub.Clients.AddWithStringId(client, client.ID)
 
 				server.handler.SetHub(hub)
 				return server
@@ -1361,7 +1354,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				hub := NewHub(DefaultLoggerConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
-				hub.Clients = map[*Client]bool{client: true}
+				hub.Clients.AddWithStringId(client, client.ID)
 
 				server.handler.SetHub(hub)
 				return server
@@ -1436,7 +1429,8 @@ func TestServer_DisconnectClient(t *testing.T) {
 
 				// Mock the hub methods that will be called during disconnect
 				mockHub.On("RemoveClient", client).Return()
-				mockHub.Clients = map[*Client]bool{client: true}
+				mockHub.On("GetClients")
+				mockHub.Clients.AddWithStringId(client, client.ID)
 
 				server.handler.SetHub(mockHub)
 				return server
@@ -1452,7 +1446,9 @@ func TestServer_DisconnectClient(t *testing.T) {
 					t.Fatal(err)
 				}
 				mockHub := NewMockHub()
-				mockHub.Clients = map[*Client]bool{} // Empty clients map
+
+				mockHub.On("GetClients")
+				mockHub.Clients = NewSharedCollection[*Client]() // Empty clients collection
 				server.handler.SetHub(mockHub)
 				return server
 			},

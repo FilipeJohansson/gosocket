@@ -255,11 +255,7 @@ func (hc *Context) GetAllClients() []*Client {
 		return []*Client{}
 	}
 
-	clients := []*Client{}
-	for client := range hc.hub.GetClients() {
-		clients = append(clients, client)
-	}
-	return clients
+	return hc.hub.GetClients()
 }
 
 // GetStats returns a map with statistics about the hub.

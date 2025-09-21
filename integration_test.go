@@ -1138,7 +1138,7 @@ func TestIntegration_RoomsIsolation(t *testing.T) {
 		}),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
 			roomName := ctx.connInfo.Headers["Room"]
-			room := c.Hub.GetRooms()[roomName]
+			room := c.Hub.GetRooms()
 			if room != nil {
 				c.Hub.BroadcastToRoom(roomName, m)
 			}
@@ -1147,8 +1147,8 @@ func TestIntegration_RoomsIsolation(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_ = server.CreateRoom("room1")
-	_ = server.CreateRoom("room2")
+	_, _ = server.CreateRoom("room1")
+	_, _ = server.CreateRoom("room2")
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -1860,8 +1860,8 @@ func TestIntegration_RoomEdgeCases(t *testing.T) {
 			case "list":
 				rooms := c.Hub.GetRooms()
 				roomNames := make([]string, 0, len(rooms))
-				for name := range rooms {
-					roomNames = append(roomNames, name)
+				for _, room := range rooms {
+					roomNames = append(roomNames, room.Name)
 				}
 				response := strings.Join(roomNames, ",")
 				return c.Send([]byte(response))
@@ -1871,8 +1871,8 @@ func TestIntegration_RoomEdgeCases(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_ = server.CreateRoom("room1")
-	_ = server.CreateRoom("room2")
+	_, _ = server.CreateRoom("room1")
+	_, _ = server.CreateRoom("room2")
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()

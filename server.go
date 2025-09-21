@@ -495,19 +495,13 @@ func (s *Server) GetClients() []*Client {
 		return []*Client{}
 	}
 
-	hubClients := s.handler.Hub().GetClients()
-	clients := make([]*Client, 0, len(hubClients))
-	for client := range hubClients {
-		clients = append(clients, client)
-	}
-
-	return clients
+	return s.handler.Hub().GetClients()
 }
 
 // GetClient returns a client by its ID. If no client with the given ID exists,
 // nil is returned. This method is safe to call concurrently.
 func (s *Server) GetClient(id string) *Client {
-	for client := range s.handler.Hub().GetClients() {
+	for _, client := range s.handler.Hub().GetClients() {
 		if client.ID == id {
 			return client
 		}
@@ -556,12 +550,12 @@ func (s *Server) DisconnectClient(id string) error {
 // will return nil. If the server is not properly initialized, an error is returned.
 //
 // Thismethod is safe to call concurrently.
-func (s *Server) CreateRoom(name string) error {
+func (s *Server) CreateRoom(name string) (*Room, error) {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return ErrServerNotInitialized
+		return nil, ErrServerNotInitialized
 	}
 
-	return s.handler.Hub().CreateRoom(name)
+	return s.handler.Hub().CreateRoom("__SERVER__", name)
 }
 
 // DeleteRoom deletes a room with the given name. If the room does not exist, it will return
@@ -587,8 +581,8 @@ func (s *Server) GetRooms() []string {
 
 	hubRooms := s.handler.Hub().GetRooms()
 	rooms := make([]string, 0, len(hubRooms))
-	for roomName := range hubRooms {
-		rooms = append(rooms, roomName)
+	for _, room := range hubRooms {
+		rooms = append(rooms, room.Name)
 	}
 
 	return rooms
@@ -686,7 +680,7 @@ func (s *Server) notifyClientsShutdown() {
 	msg := NewMessage(TextMessage, shutdownMessage)
 	msg.Encoding = JSON
 
-	for client := range clients {
+	for _, client := range clients {
 		go func(c *Client) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
