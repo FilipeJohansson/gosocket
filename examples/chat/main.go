@@ -94,15 +94,16 @@ func handleDisconnect(client *gosocket.Client, ctx *gosocket.Context) error {
 		client.LeaveRoom(room)
 
 		// Notify room about user leaving
-		leaveMsg := ChatMessage{
+		leaveMsg := gosocket.NewMessage(gosocket.TextMessage, ChatMessage{
 			Type:      MsgTypeLeave,
 			User:      username,
 			Room:      room,
 			Message:   fmt.Sprintf("%s left the room", username),
 			Timestamp: time.Now(),
-		}
+		})
+		leaveMsg.Encoding = gosocket.JSON
 
-		ctx.BroadcastJSONToRoom(room, leaveMsg)
+		ctx.Hub().BroadcastToRoom(room, leaveMsg)
 		broadcastUserList(ctx, room)
 	}
 
@@ -164,16 +165,17 @@ func handleJoinRoom(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.Con
 	client.SendJSON(joinConfirm)
 
 	// Notify room about new user
-	joinNotify := ChatMessage{
+	joinNotify := gosocket.NewMessage(gosocket.TextMessage, ChatMessage{
 		Type:      MsgTypeNotification,
 		User:      msg.User,
 		Room:      msg.Room,
 		Message:   fmt.Sprintf("%s joined the room", msg.User),
 		Timestamp: time.Now(),
-	}
+	})
+	joinNotify.Encoding = gosocket.JSON
 
 	// Broadcast to room
-	ctx.BroadcastJSONToRoom(msg.Room, joinNotify)
+	ctx.Hub().BroadcastToRoom(msg.Room, joinNotify)
 	broadcastUserList(ctx, msg.Room)
 
 	return nil
@@ -205,16 +207,17 @@ func handleLeaveRoom(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.Co
 	client.SendJSON(leaveConfirm)
 
 	// Notify room about user leaving
-	leaveNotify := ChatMessage{
+	leaveNotify := gosocket.NewMessage(gosocket.TextMessage, ChatMessage{
 		Type:      MsgTypeNotification,
 		User:      username,
 		Room:      msg.Room,
 		Message:   fmt.Sprintf("%s left the room", username),
 		Timestamp: time.Now(),
-	}
+	})
+	leaveNotify.Encoding = gosocket.JSON
 
 	// Broadcast to room
-	ctx.BroadcastJSONToRoom(msg.Room, leaveNotify)
+	ctx.Hub().BroadcastToRoom(msg.Room, leaveNotify)
 	broadcastUserList(ctx, msg.Room)
 
 	return nil
@@ -245,22 +248,23 @@ func handleChatMessage(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.
 	}
 
 	// Create chat message
-	chatMsg := ChatMessage{
+	chatMsg := gosocket.NewMessage(gosocket.TextMessage, ChatMessage{
 		Type:      MsgTypeChat,
 		User:      username,
 		Room:      msg.Room,
 		Message:   msg.Message,
 		Timestamp: time.Now(),
-	}
+	})
+	chatMsg.Encoding = gosocket.JSON
 
 	// Broadcast to room
-	ctx.BroadcastJSONToRoom(msg.Room, chatMsg)
+	ctx.Hub().BroadcastToRoom(msg.Room, chatMsg)
 
 	return nil
 }
 
 func broadcastUserList(ctx *gosocket.Context, room string) {
-	clients := ctx.GetClientsInRoom(room)
+	clients := ctx.Hub().GetRoomClients(room)
 	var users []string
 
 	for _, client := range clients {
@@ -269,14 +273,15 @@ func broadcastUserList(ctx *gosocket.Context, room string) {
 		}
 	}
 
-	userListMsg := ChatMessage{
+	userListMsg := gosocket.NewMessage(gosocket.TextMessage, ChatMessage{
 		Type:      MsgTypeUserList,
 		Room:      room,
 		Users:     users,
 		Timestamp: time.Now(),
-	}
+	})
+	userListMsg.Encoding = gosocket.JSON
 
-	ctx.BroadcastJSONToRoom(room, userListMsg)
+	ctx.Hub().BroadcastToRoom(room, userListMsg)
 }
 
 func sendErrorMessage(client *gosocket.Client, message string) error {

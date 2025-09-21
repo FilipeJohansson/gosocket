@@ -2,6 +2,7 @@ package gosocket
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,6 +18,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
+
+type ctxKey string
 
 func TestIntegration_Echo(t *testing.T) {
 	server, err := NewServer(
@@ -2010,4 +2013,36 @@ func TestIntegration_ConnectionLimits(t *testing.T) {
 	_, resp_msg, err := ws.ReadMessage()
 	require.NoError(t, err)
 	require.Equal(t, []byte("test-after-cleanup"), resp_msg)
+}
+
+func TestIntegration_AttachToCtx(t *testing.T) {
+	const testKey ctxKey = "test_key"
+
+	server, err := NewServer(
+		WithPath("/ws"),
+		WithMiddleware(func(h http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ctx := context.WithValue(r.Context(), testKey, "test_val")
+				h.ServeHTTP(w, r.WithContext(ctx))
+			})
+		}),
+		OnMessage(func(c *Client, m *Message, ctx *Context) error {
+			require.Equal(t, "test_val", ctx.Context().Value(testKey))
+			return c.Send(m.RawData)
+		}),
+	)
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(server.handler)
+	defer ts.Close()
+	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+
+	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	require.NoError(t, err)
+	defer ws.Close()
+
+	require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte("test")))
+	_, resp_msg, err := ws.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, []byte("test"), resp_msg)
 }

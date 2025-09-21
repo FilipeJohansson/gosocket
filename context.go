@@ -41,7 +41,7 @@ func NewHandlerContext(handler *Handler) *Context {
 // It retrieves the client IP, user agent, origin, and headers from the request
 // and uses them to create a new context.
 func NewHandlerContextFromRequest(handler *Handler, r *http.Request) *Context {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(r.Context())
 	return &Context{
 		handler:   handler,
 		hub:       handler.hub,
@@ -55,23 +55,6 @@ func NewHandlerContextFromRequest(handler *Handler, r *http.Request) *Context {
 			Headers:   extractHeaders(r, handler.config.RelevantHeaders...),
 			RequestID: generateRequestID(),
 		},
-	}
-}
-
-// NewHandlerContextWithConnection creates a new context with the given connection info. This
-// method is useful when you want to reuse the same connection info for multiple contexts.
-// It returns a new context with the given connection info, and the same handler and hub as the
-// original context. The context is created with a new background context, and the start time is
-// set to the current time.
-func NewHandlerContextWithConnection(handler *Handler, connInfo *ConnectionInfo) *Context {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &Context{
-		handler:   handler,
-		hub:       handler.hub,
-		ctx:       ctx,
-		cancel:    cancel,
-		startTime: time.Now(),
-		connInfo:  connInfo,
 	}
 }
 
@@ -177,97 +160,6 @@ func (hc *Context) Headers() map[string]string {
 // connection, 0 is returned.
 func (hc *Context) ProcessingDuration() time.Duration {
 	return time.Since(hc.startTime)
-}
-
-// BroadcastToAll broadcasts a message to all connected clients.
-//
-// This function is a shortcut for calling hub.BroadcastMessage(message).
-// If the context is not associated with a hub, an error is returned.
-//
-// It returns an error if the hub is not properly set.
-func (hc *Context) BroadcastToAll(message *Message) error {
-	if hc.hub == nil {
-		return ErrHubIsNil
-	}
-
-	hc.hub.BroadcastMessage(message)
-	return nil
-}
-
-// BroadcastToRoom broadcasts a message to all clients in the specified room.
-//
-// This function is a shortcut for calling hub.BroadcastToRoom(room, message).
-// If the context is not associated with a hub, an error is returned.
-//
-// It returns an error if the hub is not properly set.
-func (hc *Context) BroadcastToRoom(room string, message *Message) error {
-	if hc.hub == nil {
-		return ErrHubIsNil
-	}
-
-	message.Room = room
-	hc.hub.BroadcastToRoom(room, message)
-	return nil
-}
-
-// BroadcastJSONToAll broadcasts the given data as JSON to all connected clients.
-//
-// It wraps the given data in a Message and sets the Encoding to JSON, then
-// calls BroadcastToAll to send the message.
-//
-// It returns an error if the hub is not properly set.
-func (hc *Context) BroadcastJSONToAll(data interface{}) error {
-	message := NewMessage(TextMessage, data)
-	message.Encoding = JSON
-	return hc.BroadcastToAll(message)
-}
-
-// BroadcastJSONToRoom broadcasts the given data as JSON to all clients in the specified room.
-//
-// It wraps the given data in a Message and sets the Encoding to JSON, then
-// calls BroadcastToRoom to send the message.
-//
-// It returns an error if the hub is not properly set.
-func (hc *Context) BroadcastJSONToRoom(room string, data interface{}) error {
-	message := NewMessage(TextMessage, data)
-	message.Encoding = JSON
-	return hc.BroadcastToRoom(room, message)
-}
-
-// GetClientsInRoom returns a list of all clients in the given room. If the
-// context is not associated with a hub, an empty slice is returned.
-//
-// This method is safe to call concurrently.
-func (hc *Context) GetClientsInRoom(room string) []*Client {
-	if hc.hub == nil {
-		return []*Client{}
-	}
-	return hc.hub.GetRoomClients(room)
-}
-
-// GetAllClients returns a list of all clients connected to the hub.
-//
-// If the context is not associated with a hub, an empty slice is returned.
-//
-// This method is safe to call concurrently.
-func (hc *Context) GetAllClients() []*Client {
-	if hc.hub == nil {
-		return []*Client{}
-	}
-
-	return hc.hub.GetClients()
-}
-
-// GetStats returns a map with statistics about the hub.
-//
-// If the context is not associated with a hub, an empty map is returned.
-//
-// This method is safe to call concurrently.
-func (hc *Context) GetStats() map[string]interface{} {
-	if hc.hub == nil {
-		return map[string]interface{}{}
-	}
-	return hc.hub.GetStats()
 }
 
 // Handler returns the handler associated with the context. This can be used to

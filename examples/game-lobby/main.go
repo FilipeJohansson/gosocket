@@ -195,7 +195,7 @@ func broadcastLobbyState(ctx *gosocket.Context) {
 	}
 	mu.RUnlock()
 
-	ctx.BroadcastJSONToRoom("lobby", Message{
+	message := gosocket.NewMessage(gosocket.TextMessage, Message{
 		Type: "lobby_update",
 		Data: map[string]interface{}{
 			"players": playerList,
@@ -203,6 +203,8 @@ func broadcastLobbyState(ctx *gosocket.Context) {
 		},
 		Time: time.Now(),
 	})
+	message.Encoding = gosocket.JSON
+	ctx.Hub().BroadcastToRoom("lobby", message)
 }
 
 func broadcastGameState(gameID string, ctx *gosocket.Context) {
@@ -214,7 +216,7 @@ func broadcastGameState(gameID string, ctx *gosocket.Context) {
 	}
 	mu.RUnlock()
 
-	ctx.BroadcastJSONToRoom(gameID, Message{
+	message := gosocket.NewMessage(gosocket.TextMessage, Message{
 		Type: "game_update",
 		Data: map[string]interface{}{
 			"game_id": gameID,
@@ -222,6 +224,8 @@ func broadcastGameState(gameID string, ctx *gosocket.Context) {
 		},
 		Time: time.Now(),
 	})
+	message.Encoding = gosocket.JSON
+	ctx.Hub().BroadcastToRoom(gameID, message)
 }
 
 func servePage(w http.ResponseWriter, r *http.Request) {

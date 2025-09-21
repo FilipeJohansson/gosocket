@@ -77,7 +77,7 @@ func onMessage(client *gosocket.Client, data interface{}, ctx *gosocket.Context)
 
 	if msg.Type == "send" {
 		// Broadcast user's notification to all clients
-		ctx.BroadcastJSONToAll(Message{
+		message := gosocket.NewMessage(gosocket.TextMessage, Message{
 			Type: "notification",
 			Data: Notification{
 				Title: "User Alert",
@@ -85,6 +85,8 @@ func onMessage(client *gosocket.Client, data interface{}, ctx *gosocket.Context)
 				Icon:  "https://placehold.co/50",
 			},
 		})
+		message.Encoding = gosocket.JSON
+		ctx.Hub().BroadcastMessage(message)
 	}
 
 	return nil

@@ -482,7 +482,7 @@ func TestHandler_ProcessMessage(t *testing.T) {
 			}
 
 			client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), handler.config.MessageChanBufSize)
-			handler.processMessage(client, tt.message)
+			handler.processMessage(client, tt.message, NewHandlerContext(handler))
 
 			// process is asynchronous, so we might need a small delay
 			time.Sleep(10 * time.Millisecond)
