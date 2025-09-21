@@ -16,8 +16,8 @@ func main() {
 		gosocket.WithPort(8080),
 		gosocket.WithPath("/ws"),
 		gosocket.WithMaxConnections(100),
+		gosocket.WithAuth(AuthMiddleware),
 		gosocket.WithMiddleware(LoggingMiddleware),
-		gosocket.WithMiddleware(AuthMiddleware),
 		gosocket.OnConnect(func(c *gosocket.Client, ctx *gosocket.Context) error {
 			fmt.Printf("Client connected: %s\n", c.ID)
 			return nil
@@ -43,18 +43,15 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func AuthMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("Authorization")
-		if token == "" {
-			fmt.Println("[AUTH] No token provided")
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
+func AuthMiddleware(r *http.Request) (map[string]interface{}, error) {
+	token := r.Header.Get("Authorization")
+	if token == "" {
+		fmt.Println("[AUTH] No token provided")
+		return nil, fmt.Errorf("No token provided")
+	}
 
-		fmt.Printf("[AUTH] Token validated: %s\n", token)
-		// here you could add more complex token validation logic
+	fmt.Printf("[AUTH] Token validated: %s\n", token)
+	// here you could add more complex token validation logic
 
-		next.ServeHTTP(w, r)
-	})
+	return map[string]interface{}{"user_id": "123", "token": token}, nil
 }

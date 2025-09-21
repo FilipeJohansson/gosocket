@@ -60,7 +60,7 @@ func main() {
         }),
         gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.Context) error {
             // Broadcast to all clients
-            ctx.BroadcastToAll(gosocket.NewRawMessage(gosocket.TextMessage, message.RawData))
+            ctx.Hub().BroadcastMessage(gosocket.NewRawMessage(gosocket.TextMessage, message.RawData))
             return nil
         }),
         gosocket.OnDisconnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
@@ -70,7 +70,7 @@ func main() {
     )
 
     if err != nil {
-        // something wrong with the server configuration
+        // Something wrong with the server configuration
     }
     
     log.Fatal(ws.Start())
@@ -101,7 +101,7 @@ func main() {
     )
 
     if err != nil {
-        // something wrong with the handler configuration
+        // Something wrong with the handler configuration
     }
     
     http.Handle("/ws", ws)
@@ -116,7 +116,7 @@ Add authentication, logging, CORS, and more:
 ```go
 ws, _ := gosocket.NewServer(
     gosocket.WithPort(8080),
-    gosocket.WithMiddleware(AuthMiddleware),
+    gosocket.WithAuth(AuthMiddleware),
     gosocket.WithMiddleware(LoggingMiddleware),
     gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
         fmt.Printf("Authenticated client connected: %s\n", client.ID)
@@ -135,13 +135,13 @@ gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
 
 gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.Context) error {
     // Send to specific room
-    ctx.BroadcastToRoom("general", message.RawData)
+    ctx.Hub().BroadcastToRoom("general", gosocket.NewRawMessage(gosocket.TextMessage, message.RawData))
     
     // Send to specific client
     client.Send([]byte("ACK"))
     
     // Send to everyone
-    ctx.BroadcastToAll([]byte("Global announcement"))
+    ctx.Hub().BroadcastMessage(gosocket.NewRawMessage(gosocket.TextMessage, []byte("Global announcement")))
     
     return nil
 })
