@@ -230,11 +230,11 @@ func (c *Client) SendProtobuf(data interface{}) error {
 // nil. Otherwise, it will call the hub's JoinRoom method with the client and room.
 //
 // This method is safe to call concurrently.
-func (c *Client) JoinRoom(room string) error {
+func (c *Client) JoinRoom(roomName string) error {
 	if c.Hub == nil {
 		return ErrHubIsNil
 	}
-	c.Hub.JoinRoom(c, room)
+	c.Hub.JoinRoom(c, roomName)
 	return nil
 }
 
@@ -261,9 +261,9 @@ func (c *Client) GetRooms() []string {
 	}
 
 	var rooms []string
-	for roomName, clients := range c.Hub.GetRooms() {
-		if _, exists := clients[c]; exists {
-			rooms = append(rooms, roomName)
+	for _, room := range c.Hub.GetRooms() {
+		if _, exists := room.Clients.GetByStringId(c.ID); exists {
+			rooms = append(rooms, room.Name)
 		}
 	}
 	return rooms

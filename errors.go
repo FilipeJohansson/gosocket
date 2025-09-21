@@ -47,9 +47,12 @@ var (
 
 	// Hub errors
 	ErrHubIsNil      = errors.New("hub is nil")
-	ErrRoomNameEmpty = errors.New("room name cannot be empty")
-	ErrRoomNotFound  = errors.New("room not found")
 	ErrUpgradeFailed = errors.New("websocket upgrade failed")
+
+	// Room errors
+	ErrRoomNameEmpty     = errors.New("room name cannot be empty")
+	ErrRoomNotFound      = errors.New("room not found")
+	ErrRoomAlreadyExists = errors.New("room already exists")
 
 	// Serializer errors
 	ErrRawSerializer           = errors.New("raw serializer expects []byte")
