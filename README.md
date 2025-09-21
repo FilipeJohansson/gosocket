@@ -22,7 +22,7 @@ log.Fatal(ws.Start())
 
 ## Why GoSocket?
 
-GoSocket focuses on **developer experience** and **getting started quickly**:
+**GoSocket** focuses on **developer experience** and **getting started quickly**:
 
 - **Minimal boilerplate** - Get a WebSocket server running in a few lines
 - **Built-in features** - Rooms, broadcasting, and client management included
@@ -164,14 +164,19 @@ gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx 
 - **Flexible Integration** - Standalone server or HTTP handler
 - **Multiple Encodings** - JSON ready, Protobuf & MessagePack coming
 
-## Roadmap
+## Roadmap to v1.0.0
 
-- [x] **v0.1**: Basic WebSocket server + middleware support
-- [x] **v0.2**: Rooms and broadcasting  
-- [x] **v0.3**: Functional options pattern
-- [x] **v0.4**: Rate Limit, logging and other improvements
-- [ ] **v0.5**: Protobuf & MessagePack support
-- [ ] **v1.0**: Production ready
+| Status       | Feature |
+| ------------ | ------- |
+| ✅ Completed | WebSocket server + middleware |
+| ✅ Completed | Rooms and broadcasting |
+| 🔄 In Progress | Rate limiting, logging and other improvements |
+| ⚪ Planned | Protobuf & MessagePack support |
+| ⚪ Planned | Clustering & high availability |
+| ⚪ Planned | Monitoring & metrics |
+| ⚪ Planned | Performance benchmarks |
+
+**Note:** These are the key steps we need to complete before **GoSocket** reaches **v1.0.0**. Once all planned features are implemented and thoroughly tested, we aim to release the first stable version.
 
 ## Contributing
 
@@ -179,7 +184,7 @@ We're actively looking for contributors! Areas where you can help:
 
 - **Documentation**: Improve examples and guides
 - **Testing**: Write tests and benchmarks  
-- **Features**: Implement Protobuf/MessagePack serializers
+- **Features**: Help implement features listed in the roadmap section
 - **Bug fixes**: Report and fix issues
 
 Check out [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
