@@ -1,7 +1,7 @@
 package gosocket
 
 import (
-	"hash/fnv"
+	"hash/crc32"
 	"sync"
 )
 
@@ -58,13 +58,19 @@ func (s *SharedCollection[T]) AddWithStringId(obj T, stringId string) uint64 {
 		return existingId
 	}
 
-	internalId := s.hashStringToUint64(stringId)
+	internalId := s.stringToId(stringId)
 
+	originalId := internalId
 	for {
 		if _, exists := s.objectMap[internalId]; !exists {
 			break
 		}
 		internalId++
+
+		if internalId == originalId+1000 {
+			internalId = originalId + uint64(len(s.objectMap))
+			break
+		}
 	}
 
 	s.objectMap[internalId] = obj
@@ -151,15 +157,11 @@ func (s *SharedCollection[T]) Get(id uint64) (T, bool) {
 	return obj, found
 }
 
-func (s *SharedCollection[T]) GetAll() []T {
+func (s *SharedCollection[T]) GetAll() map[uint64]T {
 	s.Lock()
 	defer s.Unlock()
 
-	objs := make([]T, 0, len(s.objectMap))
-	for _, obj := range s.objectMap {
-		objs = append(objs, obj)
-	}
-	return objs
+	return s.objectMap
 }
 
 // Get and object with the given string ID, if it exists, otherwise nil
@@ -205,14 +207,7 @@ func (s *SharedCollection[T]) Len() int {
 	return len(s.objectMap)
 }
 
-func (s *SharedCollection[T]) hashStringToUint64(str string) uint64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(str))
-	hash := h.Sum64()
-
-	if hash == 0 {
-		hash = 1
-	}
-
-	return hash
+func (s *SharedCollection[T]) stringToId(str string) uint64 {
+	crc := crc32.ChecksumIEEE([]byte(str))
+	return uint64(crc)
 }

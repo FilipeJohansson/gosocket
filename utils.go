@@ -15,6 +15,7 @@ var clientCounter atomic.Uint64
 
 type Middleware func(http.Handler) http.Handler
 type AuthFunc func(*http.Request) (map[string]interface{}, error)
+type ClientIdGenerator func(r *http.Request, userData map[string]interface{}) (string, error)
 type UniversalOption func(HasHandler) error
 
 type HasHandler interface {

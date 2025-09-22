@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,7 +49,9 @@ type Handler struct {
 	config      *HandlerConfig
 	events      *Events
 	serializers map[EncodingType]Serializer
-	authFunc    AuthFunc
+
+	authFunc          AuthFunc
+	clientIdGenerator ClientIdGenerator
 
 	upgrader    websocket.Upgrader
 	hubRunning  sync.Once
@@ -116,6 +119,10 @@ func (h *Handler) Handlers() *Events {
 
 func (h *Handler) AuthFunc() AuthFunc {
 	return h.authFunc
+}
+
+func (h *Handler) ClientIdGenerator() ClientIdGenerator {
+	return h.clientIdGenerator
 }
 
 func (h *Handler) AddSerializer(encoding EncodingType, serializer Serializer) {
@@ -261,7 +268,22 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientId := GenerateClientID()
+	var clientId string
+	if h.clientIdGenerator != nil {
+		if clientId, err = h.clientIdGenerator(r, userData); err != nil {
+			h.log(LogTypeError, LogLevelError, "Custom client ID generation failed: %v", err)
+			http.Error(w, newClientIdGeneratorError(err).Error(), http.StatusInternalServerError)
+		}
+	} else {
+		clientId = GenerateClientID()
+	}
+
+	if strings.TrimSpace(clientId) == "" {
+		h.log(LogTypeError, LogLevelError, "Client ID cannot be empty")
+		http.Error(w, ErrInvalidClientId.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	client := NewClient(clientId, conn, h.hub, h.config.MessageChanBufSize)
 	client.ConnInfo = setupHandlerCtx.connInfo
 

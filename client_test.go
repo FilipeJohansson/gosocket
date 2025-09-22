@@ -76,29 +76,29 @@ func (m *MockHub) BroadcastToRoom(roomName string, message *Message) {
 	m.Called(roomName, message)
 }
 
-func (m *MockHub) CreateRoom(ownerId, roomName string) (*Room, error) {
+func (m *MockHub) CreateRoom(ownerId, roomName string) (*Room, uint64, error) {
 	m.Called(ownerId, roomName)
 	if roomName == "" {
-		return nil, ErrRoomNameEmpty
+		return nil, 0, ErrRoomNameEmpty
 	}
 
 	if _, exists := m.Rooms.GetByStringId(roomName); exists {
-		return nil, ErrRoomAlreadyExists
+		return nil, 0, ErrRoomAlreadyExists
 	}
 
 	room := NewRoom(ownerId, roomName)
 	m.mu.Lock()
-	m.Rooms.AddWithStringId(room, roomName)
+	id := m.Rooms.AddWithStringId(room, roomName)
 	m.mu.Unlock()
 	m.Log(LogTypeOther, LogLevelDebug, "Room created: %s", roomName)
 
-	return room, nil
+	return room, id, nil
 }
 
 func (m *MockHub) JoinRoom(client *Client, roomName string) {
 	m.Called(client, roomName)
 	if _, exists := m.Rooms.GetByStringId(roomName); !exists {
-		_, err := m.CreateRoom(client.ID, roomName)
+		_, _, err := m.CreateRoom(client.ID, roomName)
 		if err != nil {
 			m.Log(LogTypeOther, LogLevelError, "Error creating room: %s", err)
 			return
@@ -133,11 +133,11 @@ func (m *MockHub) LeaveRoom(client *Client, roomName string) {
 	}
 }
 
-func (m *MockHub) GetRoomClients(roomName string) []*Client {
+func (m *MockHub) GetClientsInRoom(roomName string) map[uint64]*Client {
 	m.Called(roomName)
 	room, exists := m.Rooms.GetByStringId(roomName)
 	if !exists {
-		return []*Client{}
+		return map[uint64]*Client{}
 	}
 
 	return room.Clients.GetAll()
@@ -148,12 +148,12 @@ func (m *MockHub) GetStats() map[string]interface{} {
 	return args.Get(0).(map[string]interface{})
 }
 
-func (m *MockHub) GetClients() []*Client {
+func (m *MockHub) GetClients() map[uint64]*Client {
 	m.Called()
 	return m.Clients.GetAll()
 }
 
-func (m *MockHub) GetRooms() []*Room {
+func (m *MockHub) GetRooms() map[uint64]*Room {
 	m.Called()
 	return m.Rooms.GetAll()
 }
@@ -167,6 +167,15 @@ func (m *MockHub) GetRoom(roomName string) *Room {
 	return room
 }
 
+func (m *MockHub) GetRoomById(roomId uint64) *Room {
+	m.Called(roomId)
+	room, exists := m.Rooms.Get(roomId)
+	if !exists {
+		return nil
+	}
+	return room
+}
+
 func (m *MockHub) DeleteRoom(roomName string) error {
 	m.Called(roomName)
 	room, exists := m.Rooms.GetByStringId(roomName)
@@ -174,9 +183,9 @@ func (m *MockHub) DeleteRoom(roomName string) error {
 		return newRoomNotFoundError(roomName)
 	}
 
-	var clientsToRemove []*Client
+	var clientsToRemove map[uint64]*Client
 	room.Clients.ForEach(func(id uint64, client *Client) {
-		clientsToRemove = append(clientsToRemove, client)
+		clientsToRemove[id] = client
 	})
 
 	for _, client := range clientsToRemove {
@@ -641,7 +650,7 @@ func TestClient_GetRooms(t *testing.T) {
 				// Manually add client to rooms for testing
 				hub.JoinRoom(client, "room1")
 				hub.JoinRoom(client, "room2")
-				_, _ = hub.CreateRoom("__SERVER__", "room3")
+				_, _, _ = hub.CreateRoom("__SERVER__", "room3")
 
 				return client
 			},

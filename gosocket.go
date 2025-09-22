@@ -183,6 +183,21 @@ func WithAuth(authFunc AuthFunc) UniversalOption {
 	}
 }
 
+// WithCustomClientID sets a custom client ID generator for a handler. The
+// generator will be called with the original request and associated user data
+// (from authentication, if any) when a new client connects to the handler.
+// If the generator returns an error, the connection will be rejected with HTTP 500.
+// If the generator returns an empty string, the connection will also be rejected.
+// The generator is called after authentication but before the WebSocket upgrade
+// and OnConnect handler, allowing the OnConnect handler to access the generated
+// client ID through the Client object.
+func WithCustomClientID(generator ClientIdGenerator) UniversalOption {
+	return func(h HasHandler) error {
+		h.Handler().clientIdGenerator = generator
+		return nil
+	}
+}
+
 func WithMaxDepth(depth int) UniversalOption {
 	return func(h HasHandler) error {
 		if depth < 1 {

@@ -1199,7 +1199,7 @@ func TestServer_RoomManagement(t *testing.T) {
 				mockHub.On("DeleteRoom", "test-room").Return(nil)
 				mockHub.On("Log", mock.AnythingOfType("LogType"), mock.AnythingOfType("LogLevel"), mock.AnythingOfType("string"), mock.AnythingOfType("[]interface {}"))
 				server.handler.SetHub(mockHub)
-				_, _ = server.CreateRoom("test-room")
+				_, _, _ = server.CreateRoom("test-room")
 				return server
 			},
 			operation:       "delete",
@@ -1232,7 +1232,7 @@ func TestServer_RoomManagement(t *testing.T) {
 			var err error
 			switch tt.operation {
 			case "create":
-				_, err = server.CreateRoom(tt.roomName)
+				_, _, err = server.CreateRoom(tt.roomName)
 			case "delete":
 				err = server.DeleteRoom(tt.roomName)
 			}
@@ -1277,9 +1277,9 @@ func TestServer_GetRooms(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				_, _ = server.CreateRoom("room1")
-				_, _ = server.CreateRoom("room2")
-				_, _ = server.CreateRoom("room3")
+				_, _, _ = server.CreateRoom("room1")
+				_, _, _ = server.CreateRoom("room2")
+				_, _, _ = server.CreateRoom("room3")
 
 				return server
 			},

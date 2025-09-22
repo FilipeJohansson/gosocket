@@ -264,7 +264,7 @@ func handleChatMessage(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.
 }
 
 func broadcastUserList(ctx *gosocket.Context, room string) {
-	clients := ctx.Hub().GetRoomClients(room)
+	clients := ctx.Hub().GetClientsInRoom(room)
 	var users []string
 
 	for _, client := range clients {
