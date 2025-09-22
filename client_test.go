@@ -111,18 +111,18 @@ func (m *MockHub) JoinRoom(client *Client, roomName string) {
 		return
 	}
 
-	room.Clients.AddWithStringId(client, client.ID)
+	room.AddClient(client)
 	m.Log(LogTypeOther, LogLevelDebug, "Client %s joined room: %s", client.ID, roomName)
 }
 
 func (m *MockHub) LeaveRoom(client *Client, roomName string) {
 	m.Called(client, roomName)
 	if room, exists := m.Rooms.GetByStringId(roomName); exists {
-		if room.Clients.RemoveByStringId(client.ID) {
+		if room.RemoveClient(client.ID) {
 			m.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomName)
 
 			// remove room if empty
-			if room.Clients.Len() == 0 {
+			if len(room.Clients()) == 0 {
 				m.Log(LogTypeOther, LogLevelDebug, "Room %s is empty, removing it", roomName)
 				err := m.DeleteRoom(roomName)
 				if err != nil {
@@ -140,7 +140,7 @@ func (m *MockHub) GetClientsInRoom(roomName string) map[uint64]*Client {
 		return map[uint64]*Client{}
 	}
 
-	return room.Clients.GetAll()
+	return room.Clients()
 }
 
 func (m *MockHub) GetStats() map[string]interface{} {
@@ -183,13 +183,13 @@ func (m *MockHub) DeleteRoom(roomName string) error {
 		return newRoomNotFoundError(roomName)
 	}
 
-	var clientsToRemove map[uint64]*Client
-	room.Clients.ForEach(func(id uint64, client *Client) {
+	clientsToRemove := map[uint64]*Client{}
+	for id, client := range room.Clients() {
 		clientsToRemove[id] = client
-	})
+	}
 
 	for _, client := range clientsToRemove {
-		room.Clients.RemoveByStringId(client.ID)
+		room.RemoveClient(client.ID)
 		m.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomName)
 	}
 

@@ -1864,7 +1864,7 @@ func TestIntegration_RoomEdgeCases(t *testing.T) {
 				rooms := c.Hub.GetRooms()
 				roomNames := make([]string, 0, len(rooms))
 				for _, room := range rooms {
-					roomNames = append(roomNames, room.Name)
+					roomNames = append(roomNames, room.name)
 				}
 				response := strings.Join(roomNames, ",")
 				return c.Send([]byte(response))

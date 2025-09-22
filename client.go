@@ -262,8 +262,8 @@ func (c *Client) GetRooms() []string {
 
 	var rooms []string
 	for _, room := range c.Hub.GetRooms() {
-		if _, exists := room.Clients.GetByStringId(c.ID); exists {
-			rooms = append(rooms, room.Name)
+		if _, exists := room.GetClient(c.ID); exists {
+			rooms = append(rooms, room.Name())
 		}
 	}
 	return rooms

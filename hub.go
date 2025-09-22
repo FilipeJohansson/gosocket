@@ -238,7 +238,7 @@ func (h *Hub) BroadcastToRoom(roomName string, message *Message) {
 		return
 	}
 
-	clientsCopy := room.Clients.GetAll()
+	clientsCopy := room.Clients()
 
 	h.broadcastToClients(message, clientsCopy)
 	h.Log(LogTypeBroadcast, LogLevelDebug, "Message broadcasted to room %s (%d clients)", roomName, len(clientsCopy))
@@ -284,7 +284,7 @@ func (h *Hub) JoinRoom(client *Client, roomName string) {
 		return
 	}
 
-	room.Clients.AddWithStringId(client, client.ID)
+	room.AddClient(client)
 	h.Log(LogTypeOther, LogLevelDebug, "Client %s joined room: %s", client.ID, roomName)
 }
 
@@ -293,11 +293,11 @@ func (h *Hub) JoinRoom(client *Client, roomName string) {
 // This method is safe to call concurrently.
 func (h *Hub) LeaveRoom(client *Client, roomName string) {
 	if room, exists := h.Rooms.GetByStringId(roomName); exists {
-		if room.Clients.RemoveByStringId(client.ID) {
+		if room.RemoveClient(client.ID) {
 			h.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomName)
 
 			// remove room if empty
-			if room.Clients.Len() == 0 {
+			if len(room.Clients()) == 0 {
 				h.Log(LogTypeOther, LogLevelDebug, "Room %s is empty, removing it", roomName)
 				err := h.DeleteRoom(roomName)
 				if err != nil {
@@ -318,7 +318,7 @@ func (h *Hub) GetClientsInRoom(roomName string) map[uint64]*Client {
 		return map[uint64]*Client{}
 	}
 
-	return room.Clients.GetAll()
+	return room.Clients()
 }
 
 // GetStats returns a map with the following keys:
@@ -336,7 +336,7 @@ func (h *Hub) GetStats() map[string]interface{} {
 
 	roomStats := make(map[string]int)
 	h.Rooms.ForEach(func(id uint64, room *Room) {
-		roomStats[room.Name] = room.Clients.Len()
+		roomStats[room.Name()] = len(room.Clients())
 	})
 	stats["rooms"] = roomStats
 
@@ -394,12 +394,12 @@ func (h *Hub) DeleteRoom(roomName string) error {
 	}
 
 	var clientsToRemove []*Client
-	room.Clients.ForEach(func(id uint64, client *Client) {
+	for _, client := range room.Clients() {
 		clientsToRemove = append(clientsToRemove, client)
-	})
+	}
 
 	for _, client := range clientsToRemove {
-		room.Clients.RemoveByStringId(client.ID)
+		room.RemoveClient(client.ID)
 		h.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomName)
 	}
 
@@ -437,8 +437,8 @@ func (h *Hub) Log(logType LogType, level LogLevel, msg string, args ...interface
 func (h *Hub) removeClientFromAllRoomsUnsafe(client *Client) {
 	var roomsToProcess []string
 	h.Rooms.ForEach(func(id uint64, room *Room) {
-		if _, exists := room.Clients.GetByStringId(client.ID); exists {
-			roomsToProcess = append(roomsToProcess, room.Name)
+		if _, exists := room.GetClient(client.ID); exists {
+			roomsToProcess = append(roomsToProcess, room.Name())
 		}
 	})
 

@@ -582,7 +582,7 @@ func (s *Server) GetRooms() []string {
 	hubRooms := s.handler.Hub().GetRooms()
 	rooms := make([]string, 0, len(hubRooms))
 	for _, room := range hubRooms {
-		rooms = append(rooms, room.Name)
+		rooms = append(rooms, room.Name())
 	}
 
 	return rooms
