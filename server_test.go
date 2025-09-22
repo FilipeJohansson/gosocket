@@ -1015,8 +1015,8 @@ func TestServer_GetClients(t *testing.T) {
 				client1 := NewClient("client1", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				client2 := NewClient("client2", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 
-				hub.Clients.AddWithStringId(client1, client1.ID)
-				hub.Clients.AddWithStringId(client2, client2.ID)
+				hub.Clients.Add(client1, client1.ID)
+				hub.Clients.Add(client2, client2.ID)
 
 				server.handler.SetHub(hub)
 				return server
@@ -1052,7 +1052,7 @@ func TestServer_GetClient(t *testing.T) {
 				hub := NewHub(DefaultLoggerConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
-				hub.Clients.AddWithStringId(client, client.ID)
+				hub.Clients.Add(client, client.ID)
 
 				server.handler.SetHub(hub)
 				return server
@@ -1123,9 +1123,9 @@ func TestServer_GetClientCount(t *testing.T) {
 				client2 := NewClient("client2", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				client3 := NewClient("client3", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 
-				hub.Clients.AddWithStringId(client1, client1.ID)
-				hub.Clients.AddWithStringId(client2, client2.ID)
-				hub.Clients.AddWithStringId(client3, client3.ID)
+				hub.Clients.Add(client1, client1.ID)
+				hub.Clients.Add(client2, client2.ID)
+				hub.Clients.Add(client3, client3.ID)
 
 				server.handler.SetHub(hub)
 				return server
@@ -1199,7 +1199,7 @@ func TestServer_RoomManagement(t *testing.T) {
 				mockHub.On("DeleteRoom", "test-room").Return(nil)
 				mockHub.On("Log", mock.AnythingOfType("LogType"), mock.AnythingOfType("LogLevel"), mock.AnythingOfType("string"), mock.AnythingOfType("[]interface {}"))
 				server.handler.SetHub(mockHub)
-				_, _, _ = server.CreateRoom("test-room")
+				_, _ = server.CreateRoom("test-room")
 				return server
 			},
 			operation:       "delete",
@@ -1232,7 +1232,7 @@ func TestServer_RoomManagement(t *testing.T) {
 			var err error
 			switch tt.operation {
 			case "create":
-				_, _, err = server.CreateRoom(tt.roomName)
+				_, err = server.CreateRoom(tt.roomName)
 			case "delete":
 				err = server.DeleteRoom(tt.roomName)
 			}
@@ -1277,9 +1277,9 @@ func TestServer_GetRooms(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				_, _, _ = server.CreateRoom("room1")
-				_, _, _ = server.CreateRoom("room2")
-				_, _, _ = server.CreateRoom("room3")
+				_, _ = server.CreateRoom("room1")
+				_, _ = server.CreateRoom("room2")
+				_, _ = server.CreateRoom("room3")
 
 				return server
 			},
@@ -1317,7 +1317,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				hub := NewHub(DefaultLoggerConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
-				hub.Clients.AddWithStringId(client, client.ID)
+				hub.Clients.Add(client, client.ID)
 
 				server.handler.SetHub(hub)
 				return server
@@ -1354,7 +1354,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				hub := NewHub(DefaultLoggerConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
-				hub.Clients.AddWithStringId(client, client.ID)
+				hub.Clients.Add(client, client.ID)
 
 				server.handler.SetHub(hub)
 				return server
@@ -1430,7 +1430,7 @@ func TestServer_DisconnectClient(t *testing.T) {
 				// Mock the hub methods that will be called during disconnect
 				mockHub.On("RemoveClient", client).Return()
 				mockHub.On("GetClients")
-				mockHub.Clients.AddWithStringId(client, client.ID)
+				mockHub.Clients.Add(client, client.ID)
 
 				server.handler.SetHub(mockHub)
 				return server
@@ -1448,7 +1448,7 @@ func TestServer_DisconnectClient(t *testing.T) {
 				mockHub := NewMockHub()
 
 				mockHub.On("GetClients")
-				mockHub.Clients = NewSharedCollection[*Client]() // Empty clients collection
+				mockHub.Clients = NewSharedCollection[*Client, string]() // Empty clients collection
 				server.handler.SetHub(mockHub)
 				return server
 			},

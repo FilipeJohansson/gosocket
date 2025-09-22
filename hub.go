@@ -31,37 +31,34 @@ type IHub interface {
 	BroadcastMessage(message *Message)
 
 	// BroadcastToRoom sends a message to all clients in a specific room.
-	BroadcastToRoom(roomName string, message *Message)
+	BroadcastToRoom(roomId string, message *Message)
 
 	// CreateRoom creates a new room with the given name.
-	CreateRoom(ownerId, roomName string) (*Room, uint64, error)
+	CreateRoom(ownerId, roomName string, customId ...string) (*Room, error)
 
 	// JoinRoom adds a client to a room.
-	JoinRoom(client *Client, roomName string)
+	JoinRoom(client *Client, roomId string) error
 
 	// LeaveRoom removes a client from a room.
-	LeaveRoom(client *Client, roomName string)
+	LeaveRoom(client *Client, roomId string)
 
 	// GetClientsInRoom returns a list of clients in a room.
-	GetClientsInRoom(roomName string) map[uint64]*Client
+	GetClientsInRoom(roomId string) map[string]*Client
 
 	// GetStats returns statistics about the hub.
 	GetStats() map[string]interface{}
 
 	// GetClients returns a list of all connected clients.
-	GetClients() map[uint64]*Client
+	GetClients() map[string]*Client
 
 	// GetRooms returns a list of all rooms.
-	GetRooms() map[uint64]*Room
+	GetRooms() map[string]*Room
 
 	// GetRoom returns a room with the given name.
-	GetRoom(roomName string) *Room
-
-	// GetRoomById returns a room with the given ID.
-	GetRoomById(roomId uint64) *Room
+	GetRoom(roomId string) *Room
 
 	// DeleteRoom deletes a room with the given name.
-	DeleteRoom(roomName string) error
+	DeleteRoom(roomId string) error
 
 	// IsRunning returns whether the hub is currently running.
 	IsRunning() bool
@@ -70,8 +67,8 @@ type IHub interface {
 }
 
 type Hub struct {
-	Clients    *SharedCollection[*Client]
-	Rooms      *SharedCollection[*Room]
+	Clients    *SharedCollection[*Client, string]
+	Rooms      *SharedCollection[*Room, string]
 	Register   chan *Client
 	Unregister chan *Client
 	Broadcast  chan *Message
@@ -87,8 +84,8 @@ type Hub struct {
 // The Register, Unregister and Broadcast channels will be created with a default buffer size.
 func NewHub(logger *LoggerConfig) *Hub {
 	return &Hub{
-		Clients:    NewSharedCollection[*Client](),
-		Rooms:      NewSharedCollection[*Room](),
+		Clients:    NewSharedCollection[*Client, string](),
+		Rooms:      NewSharedCollection[*Room, string](),
 		Register:   make(chan *Client),
 		Unregister: make(chan *Client),
 		Broadcast:  make(chan *Message),
@@ -130,7 +127,7 @@ func (h *Hub) Run(ctx context.Context) {
 				h.Log(LogTypeClient, LogLevelDebug, "Register channel closed")
 				return
 			default:
-				h.Clients.AddWithStringId(client, client.ID)
+				h.Clients.Add(client, client.ID)
 				h.Log(LogTypeClient, LogLevelDebug, "Client registered: %s", client.ID)
 			}
 
@@ -145,8 +142,8 @@ func (h *Hub) Run(ctx context.Context) {
 				h.Log(LogTypeClient, LogLevelDebug, "Unregister channel closed")
 				return
 			default:
-				if _, exists := h.Clients.GetByStringId(client.ID); exists {
-					h.Clients.RemoveByStringId(client.ID)
+				if _, exists := h.Clients.Get(client.ID); exists {
+					h.Clients.Remove(client.ID)
 
 					h.mu.Lock()
 					h.safeCloseClientChannel(client)
@@ -192,12 +189,12 @@ func (h *Hub) Stop() {
 	}
 	h.running = false
 
-	h.Clients.ForEach(func(id uint64, client *Client) {
+	h.Clients.ForEach(func(id string, client *Client) {
 		h.safeCloseClientChannel(client)
 	})
 
-	h.Clients = NewSharedCollection[*Client]()
-	h.Rooms = NewSharedCollection[*Room]()
+	h.Clients = NewSharedCollection[*Client, string]()
+	h.Rooms = NewSharedCollection[*Room, string]()
 	h.mu.Unlock()
 
 	h.safeCloseChannel(h.Register)
@@ -231,75 +228,71 @@ func (h *Hub) BroadcastMessage(message *Message) {
 // It returns an error if the room does not exist.
 //
 // It is a shorthand for calling Broadcast(h, message) after getting the clients from the room.
-func (h *Hub) BroadcastToRoom(roomName string, message *Message) {
-	room, exists := h.Rooms.GetByStringId(roomName)
+func (h *Hub) BroadcastToRoom(roomId string, message *Message) {
+	room, exists := h.Rooms.Get(roomId)
 	if !exists {
-		h.Log(LogTypeBroadcast, LogLevelError, "Room not found: %s", roomName)
+		h.Log(LogTypeBroadcast, LogLevelError, "Room not found: %s", roomId)
 		return
 	}
 
 	clientsCopy := room.Clients()
 
 	h.broadcastToClients(message, clientsCopy)
-	h.Log(LogTypeBroadcast, LogLevelDebug, "Message broadcasted to room %s (%d clients)", roomName, len(clientsCopy))
+	h.Log(LogTypeBroadcast, LogLevelDebug, "Message broadcasted to room %s (%d clients)", roomId, len(clientsCopy))
 }
 
 // CreateRoom creates a new room with the given name. If the room already exists, the method
 // will return nil. If the name is empty, an error is returned.
 //
 // This method is safe to call concurrently.
-func (h *Hub) CreateRoom(ownerId, roomName string) (*Room, uint64, error) {
+func (h *Hub) CreateRoom(ownerId, roomName string, customId ...string) (*Room, error) {
 	if roomName == "" {
-		return nil, 0, ErrRoomNameEmpty
+		return nil, ErrRoomNameEmpty
 	}
 
-	if _, exists := h.Rooms.GetByStringId(roomName); exists {
-		return nil, 0, ErrRoomAlreadyExists
+	roomId := roomName
+	if len(customId) > 0 && customId[0] != "" {
+		roomId = customId[0]
 	}
 
-	room := NewRoom(ownerId, roomName)
-	h.mu.Lock()
-	id := h.Rooms.AddWithStringId(room, roomName)
-	h.mu.Unlock()
+	if _, exists := h.Rooms.Get(roomId); exists {
+		return nil, ErrRoomAlreadyExists
+	}
+
+	room := NewRoom(roomId, ownerId, roomName)
+	h.Rooms.Add(room, roomId)
+
 	h.Log(LogTypeOther, LogLevelDebug, "Room created: %s", roomName)
-
-	return room, id, nil
+	return room, nil
 }
 
-// JoinRoom adds a client to a room. If the room does not exist, it is created.
+// JoinRoom adds a client to a room. If the room does not exist, an error is returned.
 //
 // This method is safe to call concurrently.
-func (h *Hub) JoinRoom(client *Client, roomName string) {
-	if _, exists := h.Rooms.GetByStringId(roomName); !exists {
-		_, _, err := h.CreateRoom(client.ID, roomName)
-		if err != nil {
-			h.Log(LogTypeOther, LogLevelError, "Error creating room: %s", err)
-			return
-		}
-	}
-
-	room, found := h.Rooms.GetByStringId(roomName)
-	if !found {
-		h.Log(LogTypeOther, LogLevelError, "Room not found: %s", roomName)
-		return
+func (h *Hub) JoinRoom(client *Client, roomId string) error {
+	room, exists := h.Rooms.Get(roomId)
+	if !exists {
+		h.Log(LogTypeOther, LogLevelError, "Room not found: %s", roomId)
+		return newRoomNotFoundError(roomId)
 	}
 
 	room.AddClient(client)
-	h.Log(LogTypeOther, LogLevelDebug, "Client %s joined room: %s", client.ID, roomName)
+	h.Log(LogTypeOther, LogLevelDebug, "Client %s joined room: %s", client.ID, roomId)
+	return nil
 }
 
 // LeaveRoom removes the given client from the given room. If the room does not exist, or if the client is not in the room, the method does nothing.
 //
 // This method is safe to call concurrently.
-func (h *Hub) LeaveRoom(client *Client, roomName string) {
-	if room, exists := h.Rooms.GetByStringId(roomName); exists {
+func (h *Hub) LeaveRoom(client *Client, roomId string) {
+	if room, exists := h.Rooms.Get(roomId); exists {
 		if room.RemoveClient(client.ID) {
-			h.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomName)
+			h.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomId)
 
 			// remove room if empty
 			if len(room.Clients()) == 0 {
-				h.Log(LogTypeOther, LogLevelDebug, "Room %s is empty, removing it", roomName)
-				err := h.DeleteRoom(roomName)
+				h.Log(LogTypeOther, LogLevelDebug, "Room %s is empty, removing it", roomId)
+				err := h.DeleteRoom(roomId)
 				if err != nil {
 					h.Log(LogTypeOther, LogLevelError, "Error deleting room: %s", err)
 				}
@@ -312,12 +305,11 @@ func (h *Hub) LeaveRoom(client *Client, roomName string) {
 // an empty slice is returned.
 //
 // This method is safe to call concurrently.
-func (h *Hub) GetClientsInRoom(roomName string) map[uint64]*Client {
-	room, exists := h.Rooms.GetByStringId(roomName)
+func (h *Hub) GetClientsInRoom(roomId string) map[string]*Client {
+	room, exists := h.Rooms.Get(roomId)
 	if !exists {
-		return map[uint64]*Client{}
+		return map[string]*Client{}
 	}
-
 	return room.Clients()
 }
 
@@ -335,8 +327,8 @@ func (h *Hub) GetStats() map[string]interface{} {
 	stats["total_rooms"] = h.Rooms.Len()
 
 	roomStats := make(map[string]int)
-	h.Rooms.ForEach(func(id uint64, room *Room) {
-		roomStats[room.Name()] = len(room.Clients())
+	h.Rooms.ForEach(func(id string, room *Room) {
+		roomStats[room.ID()] = len(room.Clients())
 	})
 	stats["rooms"] = roomStats
 
@@ -347,7 +339,7 @@ func (h *Hub) GetStats() map[string]interface{} {
 // and the values are booleans indicating whether the client is connected to the hub.
 //
 // This method is safe to call concurrently.
-func (h *Hub) GetClients() map[uint64]*Client {
+func (h *Hub) GetClients() map[string]*Client {
 	return h.Clients.GetAll()
 }
 
@@ -356,25 +348,14 @@ func (h *Hub) GetClients() map[uint64]*Client {
 // to the room.
 //
 // This method is safe to call concurrently.
-func (h *Hub) GetRooms() map[uint64]*Room {
+func (h *Hub) GetRooms() map[string]*Room {
 	return h.Rooms.GetAll()
-}
-
-// GetRoom returns the room with the given name. If the room does not exist, nil is returned.
-//
-// This method is safe to call concurrently.
-func (h *Hub) GetRoom(roomName string) *Room {
-	room, exists := h.Rooms.GetByStringId(roomName)
-	if !exists {
-		return nil
-	}
-	return room
 }
 
 // GetRoomById returns the room with the given ID. If the room does not exist, nil is returned.
 //
 // This method is safe to call concurrently.
-func (h *Hub) GetRoomById(roomId uint64) *Room {
+func (h *Hub) GetRoom(roomId string) *Room {
 	room, exists := h.Rooms.Get(roomId)
 	if !exists {
 		return nil
@@ -387,10 +368,10 @@ func (h *Hub) GetRoomById(roomId uint64) *Room {
 // from the hub.
 //
 // This method is safe to call concurrently.
-func (h *Hub) DeleteRoom(roomName string) error {
-	room, exists := h.Rooms.GetByStringId(roomName)
+func (h *Hub) DeleteRoom(roomId string) error {
+	room, exists := h.Rooms.Get(roomId)
 	if !exists {
-		return newRoomNotFoundError(roomName)
+		return newRoomNotFoundError(roomId)
 	}
 
 	var clientsToRemove []*Client
@@ -400,11 +381,11 @@ func (h *Hub) DeleteRoom(roomName string) error {
 
 	for _, client := range clientsToRemove {
 		room.RemoveClient(client.ID)
-		h.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomName)
+		h.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomId)
 	}
 
-	h.Rooms.RemoveByStringId(roomName)
-	h.Log(LogTypeOther, LogLevelDebug, "Room deleted: %s", roomName)
+	h.Rooms.Remove(roomId)
+	h.Log(LogTypeOther, LogLevelDebug, "Room deleted: %s", roomId)
 	return nil
 }
 
@@ -436,7 +417,7 @@ func (h *Hub) Log(logType LogType, level LogLevel, msg string, args ...interface
 // from rooms it is no longer in.
 func (h *Hub) removeClientFromAllRoomsUnsafe(client *Client) {
 	var roomsToProcess []string
-	h.Rooms.ForEach(func(id uint64, room *Room) {
+	h.Rooms.ForEach(func(id string, room *Room) {
 		if _, exists := room.GetClient(client.ID); exists {
 			roomsToProcess = append(roomsToProcess, room.Name())
 		}
@@ -452,7 +433,7 @@ func (h *Hub) removeClientFromAllRoomsUnsafe(client *Client) {
 // If a client's message channel is full or closed, it is removed from the hub.
 //
 // This method is safe to call concurrently, as it takes a read lock on the hub's clients map.
-func (h *Hub) broadcastToClients(message *Message, clients map[uint64]*Client) {
+func (h *Hub) broadcastToClients(message *Message, clients map[string]*Client) {
 	defer func() {
 		if r := recover(); r != nil {
 			h.Log(LogTypeBroadcast, LogLevelError, "PANIC RECOVERED in broadcastToClients: %v\nStack trace:\n%s\n", r, string(debug.Stack()))

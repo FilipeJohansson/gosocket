@@ -1150,8 +1150,8 @@ func TestIntegration_RoomsIsolation(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, _, _ = server.CreateRoom("room1")
-	_, _, _ = server.CreateRoom("room2")
+	_, _ = server.CreateRoom("room1")
+	_, _ = server.CreateRoom("room2")
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -1874,8 +1874,8 @@ func TestIntegration_RoomEdgeCases(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, _, _ = server.CreateRoom("room1")
-	_, _, _ = server.CreateRoom("room2")
+	_, _ = server.CreateRoom("room1")
+	_, _ = server.CreateRoom("room2")
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()

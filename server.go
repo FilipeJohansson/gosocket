@@ -490,9 +490,9 @@ func (s *Server) BroadcastToRoomProtobuf(room string, data interface{}) error {
 
 // GetClients returns all clients currently connected to the server. If the server is not properly
 // initialized, an empty slice is returned.
-func (s *Server) GetClients() map[uint64]*Client {
+func (s *Server) GetClients() map[string]*Client {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return map[uint64]*Client{}
+		return map[string]*Client{}
 	}
 
 	return s.handler.Hub().GetClients()
@@ -512,9 +512,9 @@ func (s *Server) GetClient(id string) *Client {
 // GetClientsInRoom returns all clients in the specified room. If the server is not properly
 // initialized or the room does not exist, an empty slice is returned. This method is safe to call
 // concurrently.
-func (s *Server) GetClientsInRoom(room string) map[uint64]*Client {
+func (s *Server) GetClientsInRoom(room string) map[string]*Client {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return map[uint64]*Client{}
+		return map[string]*Client{}
 	}
 
 	return s.handler.Hub().GetClientsInRoom(room)
@@ -550,9 +550,9 @@ func (s *Server) DisconnectClient(id string) error {
 // will return nil. If the server is not properly initialized, an error is returned.
 //
 // Thismethod is safe to call concurrently.
-func (s *Server) CreateRoom(name string) (*Room, uint64, error) {
+func (s *Server) CreateRoom(name string) (*Room, error) {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return nil, 0, ErrServerNotInitialized
+		return nil, ErrServerNotInitialized
 	}
 
 	return s.handler.Hub().CreateRoom("__SERVER__", name)

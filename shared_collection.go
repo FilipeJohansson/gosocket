@@ -1,121 +1,71 @@
 package gosocket
 
 import (
-	"hash/crc32"
+	"fmt"
 	"sync"
 )
 
+type ID interface {
+	~uint64 | ~string
+}
+
 // A generic, thread-safe map of objectis with auto-incrementing IDs
-type SharedCollection[T any] struct {
-	objectMap   map[uint64]T
-	stringIdMap map[string]uint64
-	nextId      uint64
+type SharedCollection[T any, K ID] struct {
+	objectMap map[K]T
+	nextId    uint64
 	sync.Mutex
 }
 
-func NewSharedCollection[T any](capacity ...int) *SharedCollection[T] {
-	var newObjMap map[uint64]T
-	var newStringIdMap map[string]uint64
+func NewSharedCollection[T any, K ID](capacity ...int) *SharedCollection[T, K] {
+	var newObjMap map[K]T
 
 	if len(capacity) > 0 {
-		newObjMap = make(map[uint64]T, capacity[0])
-		newStringIdMap = make(map[string]uint64, capacity[0])
+		newObjMap = make(map[K]T, capacity[0])
 	} else {
-		newObjMap = make(map[uint64]T)
-		newStringIdMap = make(map[string]uint64)
+		newObjMap = make(map[K]T)
 	}
 
-	return &SharedCollection[T]{
-		objectMap:   newObjMap,
-		stringIdMap: newStringIdMap,
-		nextId:      1,
+	return &SharedCollection[T, K]{
+		objectMap: newObjMap,
+		nextId:    1,
 	}
 }
 
 // Add an object to the map with the given ID (if provided) or the next available ID
 // Returns the ID of the object added
-func (s *SharedCollection[T]) Add(obj T, id ...uint64) uint64 {
+func (s *SharedCollection[T, K]) Add(obj T, id ...K) K {
 	s.Lock()
 	defer s.Unlock()
 
-	thisId := s.nextId
+	var thisId K
 	if len(id) > 0 {
 		thisId = id[0]
+	} else {
+		thisId = s.generateId()
 	}
 
 	s.objectMap[thisId] = obj
-	s.nextId++
-
 	return thisId
-}
-
-func (s *SharedCollection[T]) AddWithStringId(obj T, stringId string) uint64 {
-	s.Lock()
-	defer s.Unlock()
-
-	if existingId, exists := s.stringIdMap[stringId]; exists {
-		s.objectMap[existingId] = obj
-		return existingId
-	}
-
-	internalId := s.stringToId(stringId)
-
-	originalId := internalId
-	for {
-		if _, exists := s.objectMap[internalId]; !exists {
-			break
-		}
-		internalId++
-
-		if internalId == originalId+1000 {
-			internalId = originalId + uint64(len(s.objectMap))
-			break
-		}
-	}
-
-	s.objectMap[internalId] = obj
-	s.stringIdMap[stringId] = internalId
-
-	return internalId
 }
 
 // Removes an object from the map by ID, if it exists
 // Returns true if the object was removed
-func (s *SharedCollection[T]) Remove(id uint64) bool {
+func (s *SharedCollection[T, K]) Remove(id K) bool {
 	s.Lock()
 	defer s.Unlock()
 
-	delete(s.objectMap, id)
-	for stringId, mappedId := range s.stringIdMap {
-		if mappedId == id {
-			delete(s.stringIdMap, stringId)
-			return true
-		}
-	}
-
-	return false
-}
-
-// Removes an object from the map by string ID, if it exists
-// Returns true if the object was removed
-func (s *SharedCollection[T]) RemoveByStringId(stringId string) bool {
-	s.Lock()
-	defer s.Unlock()
-
-	if internalId, exists := s.stringIdMap[stringId]; exists {
-		delete(s.objectMap, internalId)
-		delete(s.stringIdMap, stringId)
+	if _, exists := s.objectMap[id]; exists {
+		delete(s.objectMap, id)
 		return true
 	}
-
 	return false
 }
 
 // Call the callback function for each object in the map
-func (s *SharedCollection[T]) ForEach(callback func(id uint64, obj T)) {
+func (s *SharedCollection[T, K]) ForEach(callback func(id K, obj T)) {
 	// Create a local copy while holding the lock
 	s.Lock()
-	localCopy := make(map[uint64]T, len(s.objectMap))
+	localCopy := make(map[K]T, len(s.objectMap))
 	for id, obj := range s.objectMap {
 		localCopy[id] = obj
 	}
@@ -127,29 +77,9 @@ func (s *SharedCollection[T]) ForEach(callback func(id uint64, obj T)) {
 	}
 }
 
-func (s *SharedCollection[T]) ForEachWithStringId(callback func(id uint64, stringId string, obj T)) {
-	s.Lock()
-	localCopy := make(map[uint64]T, len(s.objectMap))
-	localStringMap := make(map[uint64]string, len(s.stringIdMap))
-
-	for id, obj := range s.objectMap {
-		localCopy[id] = obj
-	}
-
-	for stringId, internalId := range s.stringIdMap {
-		localStringMap[internalId] = stringId
-	}
-	s.Unlock()
-
-	for id, obj := range localCopy {
-		stringId := localStringMap[id]
-		callback(id, stringId, obj)
-	}
-}
-
 // Get and object with the given ID, if it exists, otherwise nil
 // Also returns a boolean indication wheter the object was found
-func (s *SharedCollection[T]) Get(id uint64) (T, bool) {
+func (s *SharedCollection[T, K]) Get(id K) (T, bool) {
 	s.Lock()
 	defer s.Unlock()
 
@@ -157,57 +87,59 @@ func (s *SharedCollection[T]) Get(id uint64) (T, bool) {
 	return obj, found
 }
 
-func (s *SharedCollection[T]) GetAll() map[uint64]T {
+func (s *SharedCollection[T, K]) GetAll() map[K]T {
 	s.Lock()
 	defer s.Unlock()
 
-	return s.objectMap
-}
-
-// Get and object with the given string ID, if it exists, otherwise nil
-// Also returns a boolean indication wheter the object was found
-func (s *SharedCollection[T]) GetByStringId(stringId string) (T, bool) {
-	s.Lock()
-	defer s.Unlock()
-
-	if internalId, exists := s.stringIdMap[stringId]; exists {
-		obj, found := s.objectMap[internalId]
-		return obj, found
+	// Return a copy to avoid external modifications
+	result := make(map[K]T, len(s.objectMap))
+	for k, v := range s.objectMap {
+		result[k] = v
 	}
-
-	var zero T
-	return zero, false
+	return result
 }
 
-func (s *SharedCollection[T]) HasStringId(stringId string) bool {
+// GetIds returns all IDs in the collection
+func (s *SharedCollection[T, K]) GetIds() []K {
 	s.Lock()
 	defer s.Unlock()
 
-	_, exists := s.stringIdMap[stringId]
+	ids := make([]K, 0, len(s.objectMap))
+	for id := range s.objectMap {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func (s *SharedCollection[T, K]) Has(id K) bool {
+	s.Lock()
+	defer s.Unlock()
+
+	_, exists := s.objectMap[id]
 	return exists
-}
-
-func (s *SharedCollection[T]) GetStringId(id uint64) (string, bool) {
-	s.Lock()
-	defer s.Unlock()
-
-	for stringId, internalId := range s.stringIdMap {
-		if internalId == id {
-			return stringId, true
-		}
-	}
-	return "", false
 }
 
 // Get the approximate number of objects in the map
 // The reason this is approximate is because the map is read without holding the lock
-func (s *SharedCollection[T]) Len() int {
+func (s *SharedCollection[T, K]) Len() int {
 	s.Lock()
 	defer s.Unlock()
 	return len(s.objectMap)
 }
 
-func (s *SharedCollection[T]) stringToId(str string) uint64 {
-	crc := crc32.ChecksumIEEE([]byte(str))
-	return uint64(crc)
+func (s *SharedCollection[T, K]) generateId() K {
+	var zero K
+
+	switch any(zero).(type) {
+	case uint64:
+		id := s.nextId
+		s.nextId++
+		return any(id).(K)
+	case string:
+		id := fmt.Sprintf("%06d", s.nextId)
+		s.nextId++
+		return any(id).(K)
+	default:
+		panic("unsupported ID type")
+	}
 }

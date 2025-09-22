@@ -36,8 +36,8 @@ func (m *MockWebSocketConn) ReadMessage() (messageType int, p []byte, err error)
 // MockHub implements a mock Hub for testing
 type MockHub struct {
 	mock.Mock
-	Clients    *SharedCollection[*Client]
-	Rooms      *SharedCollection[*Room]
+	Clients    *SharedCollection[*Client, string]
+	Rooms      *SharedCollection[*Room, string]
 	Register   chan *Client
 	Unregister chan *Client
 	Broadcast  chan *Message
@@ -47,8 +47,8 @@ type MockHub struct {
 
 func NewMockHub() *MockHub {
 	return &MockHub{
-		Clients: NewSharedCollection[*Client](),
-		Rooms:   NewSharedCollection[*Room](),
+		Clients: NewSharedCollection[*Client, string](),
+		Rooms:   NewSharedCollection[*Room, string](),
 	}
 }
 
@@ -72,59 +72,55 @@ func (m *MockHub) BroadcastMessage(message *Message) {
 	m.Called(message)
 }
 
-func (m *MockHub) BroadcastToRoom(roomName string, message *Message) {
-	m.Called(roomName, message)
+func (m *MockHub) BroadcastToRoom(roomId string, message *Message) {
+	m.Called(roomId, message)
 }
 
-func (m *MockHub) CreateRoom(ownerId, roomName string) (*Room, uint64, error) {
+func (m *MockHub) CreateRoom(ownerId, roomName string, customId ...string) (*Room, error) {
 	m.Called(ownerId, roomName)
 	if roomName == "" {
-		return nil, 0, ErrRoomNameEmpty
+		return nil, ErrRoomNameEmpty
 	}
 
-	if _, exists := m.Rooms.GetByStringId(roomName); exists {
-		return nil, 0, ErrRoomAlreadyExists
+	roomId := roomName
+	if len(customId) > 0 && customId[0] != "" {
+		roomId = customId[0]
 	}
 
-	room := NewRoom(ownerId, roomName)
-	m.mu.Lock()
-	id := m.Rooms.AddWithStringId(room, roomName)
-	m.mu.Unlock()
+	if _, exists := m.Rooms.Get(roomId); exists {
+		return nil, ErrRoomAlreadyExists
+	}
+
+	room := NewRoom(roomId, ownerId, roomName)
+	m.Rooms.Add(room, roomId)
+
 	m.Log(LogTypeOther, LogLevelDebug, "Room created: %s", roomName)
-
-	return room, id, nil
+	return room, nil
 }
 
-func (m *MockHub) JoinRoom(client *Client, roomName string) {
-	m.Called(client, roomName)
-	if _, exists := m.Rooms.GetByStringId(roomName); !exists {
-		_, _, err := m.CreateRoom(client.ID, roomName)
-		if err != nil {
-			m.Log(LogTypeOther, LogLevelError, "Error creating room: %s", err)
-			return
-		}
-	}
-
-	room, found := m.Rooms.GetByStringId(roomName)
-	if !found {
-		m.Log(LogTypeOther, LogLevelError, "Room not found: %s", roomName)
-		return
+func (m *MockHub) JoinRoom(client *Client, roomId string) error {
+	m.Called(client, roomId)
+	room, exists := m.Rooms.Get(roomId)
+	if !exists {
+		m.Log(LogTypeOther, LogLevelError, "Room not found: %s", roomId)
+		return newRoomNotFoundError(roomId)
 	}
 
 	room.AddClient(client)
-	m.Log(LogTypeOther, LogLevelDebug, "Client %s joined room: %s", client.ID, roomName)
+	m.Log(LogTypeOther, LogLevelDebug, "Client %s joined room: %s", client.ID, roomId)
+	return nil
 }
 
-func (m *MockHub) LeaveRoom(client *Client, roomName string) {
-	m.Called(client, roomName)
-	if room, exists := m.Rooms.GetByStringId(roomName); exists {
+func (m *MockHub) LeaveRoom(client *Client, roomId string) {
+	m.Called(client, roomId)
+	if room, exists := m.Rooms.Get(roomId); exists {
 		if room.RemoveClient(client.ID) {
-			m.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomName)
+			m.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomId)
 
 			// remove room if empty
 			if len(room.Clients()) == 0 {
-				m.Log(LogTypeOther, LogLevelDebug, "Room %s is empty, removing it", roomName)
-				err := m.DeleteRoom(roomName)
+				m.Log(LogTypeOther, LogLevelDebug, "Room %s is empty, removing it", roomId)
+				err := m.DeleteRoom(roomId)
 				if err != nil {
 					m.Log(LogTypeOther, LogLevelError, "Error deleting room: %s", err)
 				}
@@ -133,13 +129,12 @@ func (m *MockHub) LeaveRoom(client *Client, roomName string) {
 	}
 }
 
-func (m *MockHub) GetClientsInRoom(roomName string) map[uint64]*Client {
-	m.Called(roomName)
-	room, exists := m.Rooms.GetByStringId(roomName)
+func (m *MockHub) GetClientsInRoom(roomId string) map[string]*Client {
+	m.Called(roomId)
+	room, exists := m.Rooms.Get(roomId)
 	if !exists {
-		return map[uint64]*Client{}
+		return map[string]*Client{}
 	}
-
 	return room.Clients()
 }
 
@@ -148,26 +143,17 @@ func (m *MockHub) GetStats() map[string]interface{} {
 	return args.Get(0).(map[string]interface{})
 }
 
-func (m *MockHub) GetClients() map[uint64]*Client {
+func (m *MockHub) GetClients() map[string]*Client {
 	m.Called()
 	return m.Clients.GetAll()
 }
 
-func (m *MockHub) GetRooms() map[uint64]*Room {
+func (m *MockHub) GetRooms() map[string]*Room {
 	m.Called()
 	return m.Rooms.GetAll()
 }
 
-func (m *MockHub) GetRoom(roomName string) *Room {
-	m.Called(roomName)
-	room, exists := m.Rooms.GetByStringId(roomName)
-	if !exists {
-		return nil
-	}
-	return room
-}
-
-func (m *MockHub) GetRoomById(roomId uint64) *Room {
+func (m *MockHub) GetRoom(roomId string) *Room {
 	m.Called(roomId)
 	room, exists := m.Rooms.Get(roomId)
 	if !exists {
@@ -176,25 +162,25 @@ func (m *MockHub) GetRoomById(roomId uint64) *Room {
 	return room
 }
 
-func (m *MockHub) DeleteRoom(roomName string) error {
-	m.Called(roomName)
-	room, exists := m.Rooms.GetByStringId(roomName)
+func (m *MockHub) DeleteRoom(roomId string) error {
+	m.Called(roomId)
+	room, exists := m.Rooms.Get(roomId)
 	if !exists {
-		return newRoomNotFoundError(roomName)
+		return newRoomNotFoundError(roomId)
 	}
 
-	clientsToRemove := map[uint64]*Client{}
-	for id, client := range room.Clients() {
-		clientsToRemove[id] = client
+	var clientsToRemove []*Client
+	for _, client := range room.Clients() {
+		clientsToRemove = append(clientsToRemove, client)
 	}
 
 	for _, client := range clientsToRemove {
 		room.RemoveClient(client.ID)
-		m.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomName)
+		m.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomId)
 	}
 
-	m.Rooms.RemoveByStringId(roomName)
-	m.Log(LogTypeOther, LogLevelDebug, "Room deleted: %s", roomName)
+	m.Rooms.Remove(roomId)
+	m.Log(LogTypeOther, LogLevelDebug, "Room deleted: %s", roomId)
 	return nil
 }
 
@@ -545,6 +531,7 @@ func TestClient_JoinRoom(t *testing.T) {
 				mockHub.On("Log", mock.AnythingOfType("LogType"), mock.AnythingOfType("LogLevel"), mock.AnythingOfType("string"), mock.AnythingOfType("[]interface {}"))
 				client := NewClient("test", &MockWebSocketConn{}, nil, 256)
 				client.Hub = mockHub // Type assertion bypass for testing
+				_, _ = mockHub.CreateRoom(client.ID, "test-room")
 				return client
 			},
 			room:            "test-room",
@@ -642,7 +629,7 @@ func TestClient_GetRooms(t *testing.T) {
 			expected: []string{},
 		},
 		{
-			name: "returns rooms client is in",
+			name: "returns empty slice when client has no rooms",
 			setupClient: func() *Client {
 				hub := NewHub(DefaultLoggerConfig())
 				client := NewClient("test", &MockWebSocketConn{}, hub, 256)
@@ -650,7 +637,24 @@ func TestClient_GetRooms(t *testing.T) {
 				// Manually add client to rooms for testing
 				hub.JoinRoom(client, "room1")
 				hub.JoinRoom(client, "room2")
-				_, _, _ = hub.CreateRoom("__SERVER__", "room3")
+				_, _ = hub.CreateRoom("__SERVER__", "room3")
+
+				return client
+			},
+			expected: []string{},
+		},
+		{
+			name: "returns rooms client is in",
+			setupClient: func() *Client {
+				hub := NewHub(DefaultLoggerConfig())
+				client := NewClient("test", &MockWebSocketConn{}, hub, 256)
+
+				// Manually add client to rooms for testing
+				_, _ = hub.CreateRoom("__SERVER__", "room1")
+				_, _ = hub.CreateRoom("__SERVER__", "room2")
+				hub.JoinRoom(client, "room1")
+				hub.JoinRoom(client, "room2")
+				_, _ = hub.CreateRoom("__SERVER__", "room3")
 
 				return client
 			},
