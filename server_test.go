@@ -1319,6 +1319,8 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				hub.Clients.Add(client, client.ID)
 
+				_, _ = hub.CreateRoom("test-client", "test-room")
+
 				server.handler.SetHub(hub)
 				return server
 			},

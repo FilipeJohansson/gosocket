@@ -442,9 +442,7 @@ func (s *Server) BroadcastToRoom(room string, message []byte) error {
 
 	msg := NewRawMessage(TextMessage, message)
 	msg.Room = room
-	s.handler.Hub().BroadcastToRoom(room, msg)
-
-	return nil
+	return s.handler.Hub().BroadcastToRoom(room, msg)
 }
 
 // BroadcastToRoomData sends the given data to all clients in the specified room. The data
@@ -686,9 +684,8 @@ func (s *Server) notifyClientsShutdown() {
 			defer cancel()
 
 			select {
-			case c.MessageChan <- func() []byte {
-				data, _ := json.Marshal(shutdownMessage)
-				return data
+			case c.MessageChan <- func() *Message {
+				return NewMessageWithEncoding(TextMessage, shutdownMessage, JSON)
 			}():
 			case <-ctx.Done():
 				_ = c.Disconnect()

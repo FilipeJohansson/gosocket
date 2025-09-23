@@ -81,10 +81,6 @@ var (
 	ErrUnsupportedEncoding = errors.New("unsupported encoding")
 )
 
-func newUnsupportedEncodingError(encoding EncodingType) error {
-	return fmt.Errorf("%w: %d", ErrUnsupportedEncoding, encoding)
-}
-
 func newSerializeError(err error) error {
 	return fmt.Errorf("%w: %w", ErrSerializeData, err)
 }

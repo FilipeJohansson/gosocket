@@ -5,9 +5,9 @@ package gosocket
 
 import (
 	"context"
-	"encoding/json"
 	"runtime/debug"
 	"sync"
+	"time"
 )
 
 // IHub is an interface for a hub that manages client connections and rooms.
@@ -27,11 +27,14 @@ type IHub interface {
 	// RemoveClient removes a client from the hub.
 	RemoveClient(client *Client)
 
+	// SendToClient sends a message from one client to a specific client.
+	SendToClient(fromClientId, toClientId string, message *Message) error
+
 	// BroadcastMessage sends a message to all connected clients.
 	BroadcastMessage(message *Message)
 
 	// BroadcastToRoom sends a message to all clients in a specific room.
-	BroadcastToRoom(roomId string, message *Message)
+	BroadcastToRoom(roomId string, message *Message) error
 
 	// CreateRoom creates a new room with the given name.
 	CreateRoom(ownerId, roomName string, customId ...string) (*Room, error)
@@ -50,6 +53,9 @@ type IHub interface {
 
 	// GetClients returns a list of all connected clients.
 	GetClients() map[string]*Client
+
+	// GetClient returns a client with the given ID.
+	GetClient(id string) *Client
 
 	// GetRooms returns a list of all rooms.
 	GetRooms() map[string]*Room
@@ -216,6 +222,67 @@ func (h *Hub) RemoveClient(client *Client) {
 	h.Unregister <- client
 }
 
+func (h *Hub) SendToClient(fromClientId, toClientId string, message *Message) error {
+	if fromClientId == "" || toClientId == "" {
+		return ErrInvalidClientId
+	} else if message == nil || (message.RawData == nil && message.Data == nil) {
+		return ErrNoDataToSend
+	}
+
+	fromClient := h.GetClient(fromClientId)
+	if fromClient == nil {
+		h.Log(LogTypeClient, LogLevelError, "SendToClient: From client not found: %s", fromClientId)
+		return ErrClientNotFound
+	}
+
+	fromClient.mu.Lock()
+	if fromClient.Conn == nil {
+		fromClient.mu.Unlock()
+		fromClient.Hub.Log(LogTypeClient, LogLevelError, "SendToClient (ID: %s): Connection is nil", fromClient.ID)
+		return ErrClientConnNil
+	}
+	fromClient.mu.Unlock()
+
+	var toClient *Client
+	if fromClientId == toClientId {
+		toClient = fromClient
+	} else {
+		toClient = h.GetClient(toClientId)
+		if toClient == nil {
+			h.Log(LogTypeClient, LogLevelError, "SendToClient: To client not found: %s", toClientId)
+			return ErrClientNotFound
+		}
+
+		toClient.mu.Lock()
+		if toClient.Conn == nil {
+			toClient.mu.Unlock()
+			toClient.Hub.Log(LogTypeClient, LogLevelError, "SendToClient (ID: %s): Connection is nil", toClient.ID)
+			return ErrClientConnNil
+		}
+		toClient.mu.Unlock()
+	}
+
+	message.From = fromClientId
+	message.To = toClientId
+	if message.Created.IsZero() {
+		message.Created = time.Now()
+	}
+
+	h.Log(LogTypeMessage, LogLevelDebug, "Sending message from %s to %s", fromClientId, toClientId)
+
+	select {
+	case toClient.MessageChan <- message:
+		h.Log(LogTypeMessage, LogLevelDebug, "Message sent to client %s channel", toClientId)
+		return nil
+	default:
+		h.Log(LogTypeClient, LogLevelError, "SendToClient: Client %s channel is full", toClientId)
+		safeGoroutine("Client.Disconnect", func() {
+			_ = toClient.Disconnect()
+		})
+		return ErrClientFull
+	}
+}
+
 // BroadcastMessage broadcasts a message to all clients in the hub.
 //
 // It is a shorthand for calling Broadcast(h, message).
@@ -228,17 +295,18 @@ func (h *Hub) BroadcastMessage(message *Message) {
 // It returns an error if the room does not exist.
 //
 // It is a shorthand for calling Broadcast(h, message) after getting the clients from the room.
-func (h *Hub) BroadcastToRoom(roomId string, message *Message) {
+func (h *Hub) BroadcastToRoom(roomId string, message *Message) error {
 	room, exists := h.Rooms.Get(roomId)
 	if !exists {
 		h.Log(LogTypeBroadcast, LogLevelError, "Room not found: %s", roomId)
-		return
+		return newRoomNotFoundError(roomId)
 	}
 
 	clientsCopy := room.Clients()
 
 	h.broadcastToClients(message, clientsCopy)
 	h.Log(LogTypeBroadcast, LogLevelDebug, "Message broadcasted to room %s (%d clients)", roomId, len(clientsCopy))
+	return nil
 }
 
 // CreateRoom creates a new room with the given name. If the room already exists, the method
@@ -343,6 +411,14 @@ func (h *Hub) GetClients() map[string]*Client {
 	return h.Clients.GetAll()
 }
 
+func (h *Hub) GetClient(id string) *Client {
+	client, exists := h.Clients.Get(id)
+	if !exists {
+		return nil
+	}
+	return client
+}
+
 // GetRooms returns a copy of the rooms map, where the keys are the room names and the values
 // are maps with client pointers as keys and booleans indicating whether the client is connected
 // to the room.
@@ -440,24 +516,8 @@ func (h *Hub) broadcastToClients(message *Message, clients map[string]*Client) {
 		}
 	}()
 
-	data := message.RawData
-	if data == nil && message.Data != nil {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					h.Log(LogTypeBroadcast, LogLevelError, "PANIC RECOVERED in JSON marshal during broadcast: %v\n", r)
-					return
-				}
-			}()
-
-			// TODO: use the right serializer based on Encoding
-			if jsonData, err := json.Marshal(message.Data); err == nil {
-				data = jsonData
-			}
-		}()
-	}
-
-	if data == nil {
+	if message.RawData == nil {
+		h.Log(LogTypeBroadcast, LogLevelError, "Broadcast message has no data to send")
 		return
 	}
 
@@ -472,7 +532,7 @@ func (h *Hub) broadcastToClients(message *Message, clients map[string]*Client) {
 			}()
 
 			select {
-			case client.MessageChan <- data:
+			case client.MessageChan <- message:
 				// success
 			default:
 				h.Log(LogTypeBroadcast, LogLevelDebug, "Client %s channel full/closed, marking for removal", client.ID)

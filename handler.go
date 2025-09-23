@@ -415,14 +415,47 @@ func (h *Handler) handleClientWrite(client *Client, handlerCtx *Context) {
 				return
 			}
 
-			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
+			if message == nil {
+				h.log(LogTypeMessage, LogLevelError, "%s no message to send", client.ID)
+				return
+			}
+
+			var wsMessageType int
+			switch message.Type {
+			case BinaryMessage:
+				wsMessageType = websocket.BinaryMessage
+			case TextMessage:
+			default:
+				wsMessageType = websocket.TextMessage
+			}
+
+			if message.RawData == nil && message.Data != nil {
+				// serialize based on encode
+				data, err := h.serializeMessageWithEncoding(message)
+				if err != nil {
+					h.log(LogTypeMessage, LogLevelError, "%s serialization error: %v", client.ID, err)
+					if h.events.OnError != nil {
+						_ = h.events.OnError(client, newSerializeError(err), handlerCtx)
+					}
+					continue
+				}
+
+				message.RawData = data
+			}
+
+			if message.RawData == nil {
+				h.log(LogTypeMessage, LogLevelError, "%s no data to send", client.ID)
+				return
+			}
+
+			if err := conn.WriteMessage(wsMessageType, message.RawData); err != nil {
 				h.log(LogTypeMessage, LogLevelError, "%s write error: %v", client.ID, err)
 				if h.events.OnError != nil {
 					_ = h.events.OnError(client, err, handlerCtx)
 				}
 				return
 			}
-			h.log(LogTypeMessage, LogLevelDebug, "%s wrote: %s", client.ID, message)
+			h.log(LogTypeMessage, LogLevelDebug, "%s wrote message (type: %v, size: %d bytes)", client.ID, message.Type, len(message.RawData))
 
 		case <-ticker.C:
 			select {
@@ -697,6 +730,39 @@ func (h *Handler) log(logType LogType, level LogLevel, msg string, args ...inter
 	if level <= lvl {
 		h.logger.Logger.Log(logType, level, msg, args...)
 	}
+}
+
+func (h *Handler) serializeMessageWithEncoding(message *Message) ([]byte, error) {
+	switch message.Encoding {
+	case Protobuf:
+		if serializer := h.serializers[Protobuf]; serializer != nil {
+			if protoData, err := serializer.Marshal(message.Data); err == nil {
+				return protoData, nil
+			} else {
+				return nil, newSerializeError(err)
+			}
+		}
+	case Raw:
+		if rawData, ok := message.Data.([]byte); ok {
+			return rawData, nil
+		} else {
+			return nil, ErrRawEncoding
+		}
+	case JSON:
+		if serializer := h.serializers[JSON]; serializer != nil {
+			return serializer.Marshal(message.Data)
+		}
+		fallthrough
+	default:
+		// fallback to JSON
+		if jsonData, err := json.Marshal(message.Data); err == nil {
+			return jsonData, nil
+		} else {
+			return nil, newSerializeError(err)
+		}
+	}
+
+	return nil, ErrSerializeData
 }
 
 // extractHeaders extracts relevant headers from the given http request.
