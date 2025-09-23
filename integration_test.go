@@ -25,7 +25,7 @@ func TestIntegration_Echo(t *testing.T) {
 	server, err := NewServer(
 		WithPath("/ws"),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.Send(m.RawData)
+			return c.Send(m)
 		}),
 	)
 	require.NoError(t, err)
@@ -133,7 +133,7 @@ func TestIntegration_RapidMessages(t *testing.T) {
 			MaxRateLimitViolations: 3000,
 		}),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.Send(m.RawData)
+			return c.SendRaw(m.RawData)
 		}),
 	)
 	require.NoError(t, err)
@@ -184,7 +184,7 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 				mu.Unlock()
 				return nil
 			}
-			return c.Send(m.RawData)
+			return c.SendRaw(m.RawData)
 		}),
 		OnDisconnect(func(c *Client, ctx *Context) error {
 			mu.Lock()
@@ -549,7 +549,7 @@ func TestIntegration_LargeMessagesEcho(t *testing.T) {
 			MaxRateLimitViolations: 100,
 		}),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.Send(m.RawData)
+			return c.SendRaw(m.RawData)
 		}),
 	)
 	require.NoError(t, err)
@@ -1136,14 +1136,14 @@ func TestIntegration_RoomsIsolation(t *testing.T) {
 		WithPath("/ws"),
 		WithRelevantHeaders([]string{"Room"}),
 		OnConnect(func(c *Client, ctx *Context) error {
-			c.Hub.JoinRoom(c, ctx.connInfo.Headers["Room"])
+			_ = c.Hub.JoinRoom(c, ctx.connInfo.Headers["Room"])
 			return nil
 		}),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
 			roomName := ctx.connInfo.Headers["Room"]
 			room := c.Hub.GetRooms()
 			if room != nil {
-				c.Hub.BroadcastToRoom(roomName, m)
+				_ = c.Hub.BroadcastToRoom(roomName, m)
 			}
 			return nil
 		}),
@@ -1236,7 +1236,7 @@ func TestIntegration_RateLimitingEnforced(t *testing.T) {
 		WithRateLimit(rlConfig),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
 			// echo msg
-			return c.SendMessage(m)
+			return c.Send(m)
 		}),
 	)
 	require.NoError(t, err)
@@ -1365,7 +1365,7 @@ func TestIntegration_MessageTypes(t *testing.T) {
 			mu.Lock()
 			received[int(m.Type)] = m.RawData
 			mu.Unlock()
-			return c.Send(m.RawData)
+			return c.SendRaw(m.RawData)
 		}),
 	)
 	require.NoError(t, err)
@@ -1423,7 +1423,7 @@ func TestIntegration_JSONMessages(t *testing.T) {
 
 			msg.Data = "processed: " + msg.Data
 			response, _ := json.Marshal(msg)
-			return c.Send(response)
+			return c.SendRaw(response)
 		}),
 	)
 	require.NoError(t, err)
@@ -1475,7 +1475,7 @@ func TestIntegration_ErrorHandling(t *testing.T) {
 				atomic.AddInt32(&errorsCaught, 1)
 				return fmt.Errorf("message error")
 			}
-			return c.Send(m.RawData)
+			return c.SendRaw(m.RawData)
 		}),
 		OnError(func(c *Client, err error, ctx *Context) error {
 			atomic.AddInt32(&errorsCaught, 1)
@@ -1526,7 +1526,7 @@ func TestIntegration_MemoryLeaks(t *testing.T) {
 			MaxRateLimitViolations: 10000,
 		}),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.Send(m.RawData)
+			return c.SendRaw(m.RawData)
 		}),
 	)
 	require.NoError(t, err)
@@ -1644,7 +1644,7 @@ func TestIntegration_CustomHeadersValidation(t *testing.T) {
 			return nil
 		}),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.Send(m.RawData)
+			return c.SendRaw(m.RawData)
 		}),
 	)
 	require.NoError(t, err)
@@ -1704,7 +1704,7 @@ func TestIntegration_MultipleClientsWithDifferentHeaders(t *testing.T) {
 			return nil
 		}),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.Send(m.RawData)
+			return c.SendRaw(m.RawData)
 		}),
 	)
 	require.NoError(t, err)
@@ -1788,7 +1788,7 @@ func TestIntegration_IgnoredHeaders(t *testing.T) {
 			return nil
 		}),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.Send(m.RawData)
+			return c.SendRaw(m.RawData)
 		}),
 	)
 	require.NoError(t, err)
@@ -1841,7 +1841,7 @@ func TestIntegration_RoomEdgeCases(t *testing.T) {
 			switch parts[0] {
 			case "join":
 				if len(parts) > 1 {
-					c.Hub.JoinRoom(c, parts[1])
+					_ = c.Hub.JoinRoom(c, parts[1])
 					mu.Lock()
 					events = append(events, fmt.Sprintf("joined-%s", parts[1]))
 					mu.Unlock()
@@ -1855,7 +1855,7 @@ func TestIntegration_RoomEdgeCases(t *testing.T) {
 				}
 			case "broadcast":
 				if len(parts) > 2 {
-					c.Hub.BroadcastToRoom(parts[1], &Message{
+					_ = c.Hub.BroadcastToRoom(parts[1], &Message{
 						Type:    websocket.TextMessage,
 						RawData: []byte(parts[2]),
 					})
@@ -1864,10 +1864,10 @@ func TestIntegration_RoomEdgeCases(t *testing.T) {
 				rooms := c.Hub.GetRooms()
 				roomNames := make([]string, 0, len(rooms))
 				for _, room := range rooms {
-					roomNames = append(roomNames, room.Name)
+					roomNames = append(roomNames, room.name)
 				}
 				response := strings.Join(roomNames, ",")
-				return c.Send([]byte(response))
+				return c.SendRaw([]byte(response))
 			}
 			return nil
 		}),
@@ -1971,7 +1971,7 @@ func TestIntegration_ConnectionLimits(t *testing.T) {
 		WithPath("/ws"),
 		WithMaxConnections(maxConnections),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.Send(m.RawData)
+			return c.SendRaw(m.RawData)
 		}),
 	)
 	require.NoError(t, err)
@@ -2028,7 +2028,7 @@ func TestIntegration_AttachToCtx(t *testing.T) {
 		}),
 		OnMessage(func(c *Client, m *Message, ctx *Context) error {
 			require.Equal(t, "test_val", ctx.Context().Value(testKey))
-			return c.Send(m.RawData)
+			return c.SendRaw(m.RawData)
 		}),
 	)
 	require.NoError(t, err)

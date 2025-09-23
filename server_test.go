@@ -1015,8 +1015,8 @@ func TestServer_GetClients(t *testing.T) {
 				client1 := NewClient("client1", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				client2 := NewClient("client2", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 
-				hub.Clients.AddWithStringId(client1, client1.ID)
-				hub.Clients.AddWithStringId(client2, client2.ID)
+				hub.Clients.Add(client1, client1.ID)
+				hub.Clients.Add(client2, client2.ID)
 
 				server.handler.SetHub(hub)
 				return server
@@ -1052,7 +1052,7 @@ func TestServer_GetClient(t *testing.T) {
 				hub := NewHub(DefaultLoggerConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
-				hub.Clients.AddWithStringId(client, client.ID)
+				hub.Clients.Add(client, client.ID)
 
 				server.handler.SetHub(hub)
 				return server
@@ -1123,9 +1123,9 @@ func TestServer_GetClientCount(t *testing.T) {
 				client2 := NewClient("client2", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				client3 := NewClient("client3", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 
-				hub.Clients.AddWithStringId(client1, client1.ID)
-				hub.Clients.AddWithStringId(client2, client2.ID)
-				hub.Clients.AddWithStringId(client3, client3.ID)
+				hub.Clients.Add(client1, client1.ID)
+				hub.Clients.Add(client2, client2.ID)
+				hub.Clients.Add(client3, client3.ID)
 
 				server.handler.SetHub(hub)
 				return server
@@ -1317,7 +1317,9 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				hub := NewHub(DefaultLoggerConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
-				hub.Clients.AddWithStringId(client, client.ID)
+				hub.Clients.Add(client, client.ID)
+
+				_, _ = hub.CreateRoom("test-client", "test-room")
 
 				server.handler.SetHub(hub)
 				return server
@@ -1354,7 +1356,7 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				hub := NewHub(DefaultLoggerConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
-				hub.Clients.AddWithStringId(client, client.ID)
+				hub.Clients.Add(client, client.ID)
 
 				server.handler.SetHub(hub)
 				return server
@@ -1430,7 +1432,7 @@ func TestServer_DisconnectClient(t *testing.T) {
 				// Mock the hub methods that will be called during disconnect
 				mockHub.On("RemoveClient", client).Return()
 				mockHub.On("GetClients")
-				mockHub.Clients.AddWithStringId(client, client.ID)
+				mockHub.Clients.Add(client, client.ID)
 
 				server.handler.SetHub(mockHub)
 				return server
@@ -1448,7 +1450,7 @@ func TestServer_DisconnectClient(t *testing.T) {
 				mockHub := NewMockHub()
 
 				mockHub.On("GetClients")
-				mockHub.Clients = NewSharedCollection[*Client]() // Empty clients collection
+				mockHub.Clients = NewSharedCollection[*Client, string]() // Empty clients collection
 				server.handler.SetHub(mockHub)
 				return server
 			},

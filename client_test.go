@@ -2,7 +2,6 @@ package gosocket
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -36,19 +35,18 @@ func (m *MockWebSocketConn) ReadMessage() (messageType int, p []byte, err error)
 // MockHub implements a mock Hub for testing
 type MockHub struct {
 	mock.Mock
-	Clients    *SharedCollection[*Client]
-	Rooms      *SharedCollection[*Room]
+	Clients    *SharedCollection[*Client, string]
+	Rooms      *SharedCollection[*Room, string]
 	Register   chan *Client
 	Unregister chan *Client
 	Broadcast  chan *Message
-	mu         sync.RWMutex
 	running    bool
 }
 
 func NewMockHub() *MockHub {
 	return &MockHub{
-		Clients: NewSharedCollection[*Client](),
-		Rooms:   NewSharedCollection[*Room](),
+		Clients: NewSharedCollection[*Client, string](),
+		Rooms:   NewSharedCollection[*Room, string](),
 	}
 }
 
@@ -62,69 +60,129 @@ func (m *MockHub) Stop() {
 
 func (m *MockHub) AddClient(client *Client) {
 	m.Called(client)
+	m.Clients.Add(client, client.ID)
 }
 
 func (m *MockHub) RemoveClient(client *Client) {
 	m.Called(client)
 }
 
+func (m *MockHub) SendToClient(fromClientId, toClientId string, message *Message) error {
+	m.Called(fromClientId, toClientId, message)
+	if fromClientId == "" || toClientId == "" {
+		return ErrInvalidClientId
+	} else if message == nil || (message.RawData == nil && message.Data == nil) {
+		return ErrNoDataToSend
+	}
+
+	fromClient := m.GetClient(fromClientId)
+	if fromClient == nil {
+		m.Log(LogTypeClient, LogLevelError, "SendToClient: From client not found: %s", fromClientId)
+		return ErrClientNotFound
+	}
+
+	fromClient.mu.Lock()
+	if fromClient.Conn == nil {
+		fromClient.mu.Unlock()
+		fromClient.Hub.Log(LogTypeClient, LogLevelError, "SendToClient (ID: %s): Connection is nil", fromClient.ID)
+		return ErrClientConnNil
+	}
+	fromClient.mu.Unlock()
+
+	var toClient *Client
+	if fromClientId == toClientId {
+		toClient = fromClient
+	} else {
+		toClient := m.GetClient(toClientId)
+		if toClient == nil {
+			m.Log(LogTypeClient, LogLevelError, "SendToClient: To client not found: %s", toClientId)
+			return ErrClientNotFound
+		}
+
+		toClient.mu.Lock()
+		if toClient.Conn == nil {
+			toClient.mu.Unlock()
+			toClient.Hub.Log(LogTypeClient, LogLevelError, "SendToClient (ID: %s): Connection is nil", toClient.ID)
+			return ErrClientConnNil
+		}
+		toClient.mu.Unlock()
+	}
+
+	message.From = fromClientId
+	message.To = toClientId
+	if message.Created.IsZero() {
+		message.Created = time.Now()
+	}
+
+	m.Log(LogTypeMessage, LogLevelDebug, "Sending message from %s to %s", fromClientId, toClientId)
+
+	select {
+	case toClient.MessageChan <- message:
+		m.Log(LogTypeMessage, LogLevelDebug, "Message sent to client %s channel", toClientId)
+		return nil
+	default:
+		m.Log(LogTypeClient, LogLevelError, "SendToClient: Client %s channel is full", toClientId)
+		safeGoroutine("Client.Disconnect", func() {
+			_ = toClient.Disconnect()
+		})
+		return ErrClientFull
+	}
+}
+
 func (m *MockHub) BroadcastMessage(message *Message) {
 	m.Called(message)
 }
 
-func (m *MockHub) BroadcastToRoom(roomName string, message *Message) {
-	m.Called(roomName, message)
+func (m *MockHub) BroadcastToRoom(roomId string, message *Message) error {
+	m.Called(roomId, message)
+	return nil
 }
 
-func (m *MockHub) CreateRoom(ownerId, roomName string) (*Room, error) {
+func (m *MockHub) CreateRoom(ownerId, roomName string, customId ...string) (*Room, error) {
 	m.Called(ownerId, roomName)
 	if roomName == "" {
 		return nil, ErrRoomNameEmpty
 	}
 
-	if _, exists := m.Rooms.GetByStringId(roomName); exists {
+	roomId := roomName
+	if len(customId) > 0 && customId[0] != "" {
+		roomId = customId[0]
+	}
+
+	if _, exists := m.Rooms.Get(roomId); exists {
 		return nil, ErrRoomAlreadyExists
 	}
 
-	room := NewRoom(ownerId, roomName)
-	m.mu.Lock()
-	m.Rooms.AddWithStringId(room, roomName)
-	m.mu.Unlock()
-	m.Log(LogTypeOther, LogLevelDebug, "Room created: %s", roomName)
+	room := NewRoom(roomId, ownerId, roomName)
+	m.Rooms.Add(room, roomId)
 
+	m.Log(LogTypeOther, LogLevelDebug, "Room created: %s", roomName)
 	return room, nil
 }
 
-func (m *MockHub) JoinRoom(client *Client, roomName string) {
-	m.Called(client, roomName)
-	if _, exists := m.Rooms.GetByStringId(roomName); !exists {
-		_, err := m.CreateRoom(client.ID, roomName)
-		if err != nil {
-			m.Log(LogTypeOther, LogLevelError, "Error creating room: %s", err)
-			return
-		}
+func (m *MockHub) JoinRoom(client *Client, roomId string) error {
+	m.Called(client, roomId)
+	room, exists := m.Rooms.Get(roomId)
+	if !exists {
+		m.Log(LogTypeOther, LogLevelError, "Room not found: %s", roomId)
+		return newRoomNotFoundError(roomId)
 	}
 
-	room, found := m.Rooms.GetByStringId(roomName)
-	if !found {
-		m.Log(LogTypeOther, LogLevelError, "Room not found: %s", roomName)
-		return
-	}
-
-	room.Clients.AddWithStringId(client, client.ID)
-	m.Log(LogTypeOther, LogLevelDebug, "Client %s joined room: %s", client.ID, roomName)
+	room.AddClient(client)
+	m.Log(LogTypeOther, LogLevelDebug, "Client %s joined room: %s", client.ID, roomId)
+	return nil
 }
 
-func (m *MockHub) LeaveRoom(client *Client, roomName string) {
-	m.Called(client, roomName)
-	if room, exists := m.Rooms.GetByStringId(roomName); exists {
-		if room.Clients.RemoveByStringId(client.ID) {
-			m.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomName)
+func (m *MockHub) LeaveRoom(client *Client, roomId string) {
+	m.Called(client, roomId)
+	if room, exists := m.Rooms.Get(roomId); exists {
+		if room.RemoveClient(client.ID) {
+			m.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomId)
 
 			// remove room if empty
-			if room.Clients.Len() == 0 {
-				m.Log(LogTypeOther, LogLevelDebug, "Room %s is empty, removing it", roomName)
-				err := m.DeleteRoom(roomName)
+			if len(room.Clients()) == 0 {
+				m.Log(LogTypeOther, LogLevelDebug, "Room %s is empty, removing it", roomId)
+				err := m.DeleteRoom(roomId)
 				if err != nil {
 					m.Log(LogTypeOther, LogLevelError, "Error deleting room: %s", err)
 				}
@@ -133,14 +191,13 @@ func (m *MockHub) LeaveRoom(client *Client, roomName string) {
 	}
 }
 
-func (m *MockHub) GetRoomClients(roomName string) []*Client {
-	m.Called(roomName)
-	room, exists := m.Rooms.GetByStringId(roomName)
+func (m *MockHub) GetClientsInRoom(roomId string) map[string]*Client {
+	m.Called(roomId)
+	room, exists := m.Rooms.Get(roomId)
 	if !exists {
-		return []*Client{}
+		return map[string]*Client{}
 	}
-
-	return room.Clients.GetAll()
+	return room.Clients()
 }
 
 func (m *MockHub) GetStats() map[string]interface{} {
@@ -148,48 +205,58 @@ func (m *MockHub) GetStats() map[string]interface{} {
 	return args.Get(0).(map[string]interface{})
 }
 
-func (m *MockHub) GetClients() []*Client {
+func (m *MockHub) GetClients() map[string]*Client {
 	m.Called()
 	return m.Clients.GetAll()
 }
 
-func (m *MockHub) GetRooms() []*Room {
+func (m *MockHub) GetClient(id string) *Client {
+	m.Called()
+	client, exists := m.Clients.Get(id)
+	if !exists {
+		return nil
+	}
+	return client
+}
+
+func (m *MockHub) GetRooms() map[string]*Room {
 	m.Called()
 	return m.Rooms.GetAll()
 }
 
-func (m *MockHub) GetRoom(roomName string) *Room {
-	m.Called(roomName)
-	room, exists := m.Rooms.GetByStringId(roomName)
+func (m *MockHub) GetRoom(roomId string) *Room {
+	m.Called(roomId)
+	room, exists := m.Rooms.Get(roomId)
 	if !exists {
 		return nil
 	}
 	return room
 }
 
-func (m *MockHub) DeleteRoom(roomName string) error {
-	m.Called(roomName)
-	room, exists := m.Rooms.GetByStringId(roomName)
+func (m *MockHub) DeleteRoom(roomId string) error {
+	m.Called(roomId)
+	room, exists := m.Rooms.Get(roomId)
 	if !exists {
-		return newRoomNotFoundError(roomName)
+		return newRoomNotFoundError(roomId)
 	}
 
 	var clientsToRemove []*Client
-	room.Clients.ForEach(func(id uint64, client *Client) {
+	for _, client := range room.Clients() {
 		clientsToRemove = append(clientsToRemove, client)
-	})
-
-	for _, client := range clientsToRemove {
-		room.Clients.RemoveByStringId(client.ID)
-		m.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomName)
 	}
 
-	m.Rooms.RemoveByStringId(roomName)
-	m.Log(LogTypeOther, LogLevelDebug, "Room deleted: %s", roomName)
+	for _, client := range clientsToRemove {
+		room.RemoveClient(client.ID)
+		m.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomId)
+	}
+
+	m.Rooms.Remove(roomId)
+	m.Log(LogTypeOther, LogLevelDebug, "Room deleted: %s", roomId)
 	return nil
 }
 
 func (m *MockHub) IsRunning() bool {
+	m.Called()
 	return m.running
 }
 
@@ -255,38 +322,66 @@ func TestClient_Send(t *testing.T) {
 	tests := []struct {
 		name            string
 		setupClient     func() *Client
-		message         []byte
+		message         *Message
 		isExpectedError bool
 		expectedError   error
 	}{
 		{
 			name: "sends message successfully",
 			setupClient: func() *Client {
-				return NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
+				mockHub := NewMockHub()
+
+				mockHub.On("AddClient", mock.Anything)
+				mockHub.On("SendToClient", mock.Anything, mock.Anything, mock.Anything)
+				mockHub.On("GetClient", mock.Anything)
+				mockHub.On("Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+				client := NewClient("test", &MockWebSocketConn{}, mockHub, 256)
+				mockHub.AddClient(client)
+				return client
 			},
-			message:         []byte("test message"),
+			message:         &Message{Type: BinaryMessage, Data: []byte("test message"), RawData: []byte("test message"), Encoding: Raw, Created: time.Now()},
 			isExpectedError: false,
 		},
 		{
 			name: "fails when connection is nil",
 			setupClient: func() *Client {
-				return NewClient("test", nil, NewHub(DefaultLoggerConfig()), 256)
+				mockHub := NewMockHub()
+
+				mockHub.On("AddClient", mock.Anything)
+				mockHub.On("SendToClient", mock.Anything, mock.Anything, mock.Anything)
+				mockHub.On("GetClient", mock.Anything)
+				mockHub.On("Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+				client := NewClient("test", nil, mockHub, 256)
+				mockHub.AddClient(client)
+				return client
 			},
-			message:         []byte("test message"),
+			message:         NewRawMessage(BinaryMessage, []byte("test message")),
 			isExpectedError: true,
 			expectedError:   ErrClientConnNil,
 		},
 		{
 			name: "fails when message channel is full",
 			setupClient: func() *Client {
-				client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
+				mockHub := NewMockHub()
+
+				mockHub.On("AddClient", mock.Anything)
+				mockHub.On("SendToClient", mock.Anything, mock.Anything, mock.Anything)
+				mockHub.On("GetClient", mock.Anything)
+				mockHub.On("Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+				client := NewClient("test", &MockWebSocketConn{}, mockHub, 256)
+				mockHub.AddClient(client)
+
 				// Fill the channel to capacity
 				for i := 0; i < cap(client.MessageChan); i++ {
-					client.MessageChan <- []byte("fill")
+					client.MessageChan <- NewRawMessage(BinaryMessage, []byte("fill"))
 				}
+
 				return client
 			},
-			message:         []byte("test message"),
+			message:         NewRawMessage(BinaryMessage, []byte("test message")),
 			isExpectedError: true,
 			expectedError:   ErrClientFull,
 		},
@@ -352,24 +447,6 @@ func TestClient_SendMessage(t *testing.T) {
 			isExpectedError: false,
 		},
 		{
-			name: "fails with raw encoding and non-byte data",
-			message: &Message{
-				Data:     "string data",
-				Encoding: Raw,
-			},
-			isExpectedError: true,
-			expectedError:   ErrRawEncoding,
-		},
-		{
-			name: "fails with unsupported encoding",
-			message: &Message{
-				Data:     "test data",
-				Encoding: EncodingType(999),
-			},
-			isExpectedError: true,
-			expectedError:   newUnsupportedEncodingError(EncodingType(999)),
-		},
-		{
 			name: "fails with no data",
 			message: &Message{
 				Type: TextMessage,
@@ -381,8 +458,17 @@ func TestClient_SendMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
-			err := client.SendMessage(tt.message)
+			mockHub := NewMockHub()
+
+			mockHub.On("AddClient", mock.Anything)
+			mockHub.On("SendToClient", mock.Anything, mock.Anything, mock.Anything)
+			mockHub.On("GetClient", mock.Anything)
+			mockHub.On("Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+			client := NewClient("test", &MockWebSocketConn{}, mockHub, 256)
+			mockHub.AddClient(client)
+
+			err := client.Send(tt.message)
 
 			if !tt.isExpectedError {
 				assert.NoError(t, err)
@@ -393,81 +479,6 @@ func TestClient_SendMessage(t *testing.T) {
 				case <-time.After(100 * time.Millisecond):
 					t.Fatal("Expected message in channel")
 				}
-			} else {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedError.Error())
-			}
-		})
-	}
-}
-
-func TestClient_SendData(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
-
-	testData := map[string]interface{}{
-		"message": "hello",
-		"count":   42,
-	}
-
-	err := client.SendData(testData)
-	assert.NoError(t, err)
-
-	// Verify JSON data was sent
-	select {
-	case msg := <-client.MessageChan:
-		var result map[string]interface{}
-		err := json.Unmarshal(msg, &result)
-		assert.NoError(t, err)
-		assert.Equal(t, "hello", result["message"])
-		assert.Equal(t, float64(42), result["count"]) // JSON unmarshals numbers as float64
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("Expected message in channel")
-	}
-}
-
-func TestClient_SendDataWithEncoding(t *testing.T) {
-	tests := []struct {
-		name            string
-		data            interface{}
-		encoding        EncodingType
-		isExpectedError bool
-		expectedError   error
-	}{
-		{
-			name:            "sends JSON data",
-			data:            map[string]string{"key": "value"},
-			encoding:        JSON,
-			isExpectedError: false,
-		},
-		{
-			name:            "sends raw byte data",
-			data:            []byte("raw data"),
-			encoding:        Raw,
-			isExpectedError: false,
-		},
-		{
-			name:            "fails with raw encoding and non-byte data",
-			data:            "string data",
-			encoding:        Raw,
-			isExpectedError: true,
-			expectedError:   ErrRawEncoding,
-		},
-		{
-			name:            "fails with unsupported encoding",
-			data:            "test data",
-			encoding:        EncodingType(999),
-			isExpectedError: true,
-			expectedError:   newUnsupportedEncodingError(EncodingType(999)),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
-			err := client.SendDataWithEncoding(tt.data, tt.encoding)
-
-			if !tt.isExpectedError {
-				assert.NoError(t, err)
 			} else {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectedError.Error())
@@ -488,17 +499,19 @@ func TestClient_SendJSON(t *testing.T) {
 			data:            map[string]string{"key": "value"},
 			isExpectedError: false,
 		},
-		{
-			name:            "fails with invalid JSON data",
-			data:            make(chan int), // channels can't be marshaled to JSON
-			isExpectedError: true,
-			expectedError:   ErrSerializeData,
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
+			mockHub := NewMockHub()
+
+			mockHub.On("AddClient", mock.Anything)
+			mockHub.On("SendToClient", mock.Anything, mock.Anything, mock.Anything)
+			mockHub.On("GetClient", mock.Anything)
+			mockHub.On("Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+			client := NewClient("test", &MockWebSocketConn{}, mockHub, 256)
+			mockHub.AddClient(client)
 			err := client.SendJSON(tt.data)
 
 			if !tt.isExpectedError {
@@ -536,6 +549,7 @@ func TestClient_JoinRoom(t *testing.T) {
 				mockHub.On("Log", mock.AnythingOfType("LogType"), mock.AnythingOfType("LogLevel"), mock.AnythingOfType("string"), mock.AnythingOfType("[]interface {}"))
 				client := NewClient("test", &MockWebSocketConn{}, nil, 256)
 				client.Hub = mockHub // Type assertion bypass for testing
+				_, _ = mockHub.CreateRoom(client.ID, "test-room")
 				return client
 			},
 			room:            "test-room",
@@ -633,14 +647,31 @@ func TestClient_GetRooms(t *testing.T) {
 			expected: []string{},
 		},
 		{
+			name: "returns empty slice when client has no rooms",
+			setupClient: func() *Client {
+				hub := NewHub(DefaultLoggerConfig())
+				client := NewClient("test", &MockWebSocketConn{}, hub, 256)
+
+				// Manually add client to rooms for testing
+				_ = hub.JoinRoom(client, "room1")
+				_ = hub.JoinRoom(client, "room2")
+				_, _ = hub.CreateRoom("__SERVER__", "room3")
+
+				return client
+			},
+			expected: []string{},
+		},
+		{
 			name: "returns rooms client is in",
 			setupClient: func() *Client {
 				hub := NewHub(DefaultLoggerConfig())
 				client := NewClient("test", &MockWebSocketConn{}, hub, 256)
 
 				// Manually add client to rooms for testing
-				hub.JoinRoom(client, "room1")
-				hub.JoinRoom(client, "room2")
+				_, _ = hub.CreateRoom("__SERVER__", "room1")
+				_, _ = hub.CreateRoom("__SERVER__", "room2")
+				_ = hub.JoinRoom(client, "room1")
+				_ = hub.JoinRoom(client, "room2")
 				_, _ = hub.CreateRoom("__SERVER__", "room3")
 
 				return client
@@ -807,7 +838,15 @@ func TestClient_ConcurrentAccess(t *testing.T) {
 }
 
 func TestClient_MessageChannelCapacity(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
+	mockHub := NewMockHub()
+
+	mockHub.On("AddClient", mock.Anything)
+	mockHub.On("SendToClient", mock.Anything, mock.Anything, mock.Anything)
+	mockHub.On("GetClient", mock.Anything)
+	mockHub.On("Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+	client := NewClient("test", &MockWebSocketConn{}, mockHub, 256)
+	mockHub.AddClient(client)
 
 	// Verify channel capacity
 	assert.Equal(t, 256, cap(client.MessageChan))
@@ -815,18 +854,18 @@ func TestClient_MessageChannelCapacity(t *testing.T) {
 	// Fill channel to capacity - 1
 	for i := 0; i < 255; i++ {
 		select {
-		case client.MessageChan <- []byte(fmt.Sprintf("message_%d", i)):
+		case client.MessageChan <- NewRawMessage(BinaryMessage, []byte(fmt.Sprintf("message_%d", i))):
 		default:
 			t.Fatalf("Channel should not be full at message %d", i)
 		}
 	}
 
 	// One more should still work
-	err := client.Send([]byte("last_message"))
+	err := client.Send(&Message{Data: []byte("last_message")})
 	assert.NoError(t, err)
 
 	// Now it should be full
-	err = client.Send([]byte("overflow_message"))
+	err = client.Send(&Message{Data: []byte("overflow_message")})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "client message channel is full")
 }

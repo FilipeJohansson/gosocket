@@ -442,9 +442,7 @@ func (s *Server) BroadcastToRoom(room string, message []byte) error {
 
 	msg := NewRawMessage(TextMessage, message)
 	msg.Room = room
-	s.handler.Hub().BroadcastToRoom(room, msg)
-
-	return nil
+	return s.handler.Hub().BroadcastToRoom(room, msg)
 }
 
 // BroadcastToRoomData sends the given data to all clients in the specified room. The data
@@ -490,9 +488,9 @@ func (s *Server) BroadcastToRoomProtobuf(room string, data interface{}) error {
 
 // GetClients returns all clients currently connected to the server. If the server is not properly
 // initialized, an empty slice is returned.
-func (s *Server) GetClients() []*Client {
+func (s *Server) GetClients() map[string]*Client {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return []*Client{}
+		return map[string]*Client{}
 	}
 
 	return s.handler.Hub().GetClients()
@@ -512,12 +510,12 @@ func (s *Server) GetClient(id string) *Client {
 // GetClientsInRoom returns all clients in the specified room. If the server is not properly
 // initialized or the room does not exist, an empty slice is returned. This method is safe to call
 // concurrently.
-func (s *Server) GetClientsInRoom(room string) []*Client {
+func (s *Server) GetClientsInRoom(room string) map[string]*Client {
 	if s.handler == nil || s.handler.Hub() == nil {
-		return []*Client{}
+		return map[string]*Client{}
 	}
 
-	return s.handler.Hub().GetRoomClients(room)
+	return s.handler.Hub().GetClientsInRoom(room)
 }
 
 // GetClientCount returns the number of clients currently connected to the server. If the server is not properly
@@ -582,7 +580,7 @@ func (s *Server) GetRooms() []string {
 	hubRooms := s.handler.Hub().GetRooms()
 	rooms := make([]string, 0, len(hubRooms))
 	for _, room := range hubRooms {
-		rooms = append(rooms, room.Name)
+		rooms = append(rooms, room.Name())
 	}
 
 	return rooms
@@ -686,9 +684,8 @@ func (s *Server) notifyClientsShutdown() {
 			defer cancel()
 
 			select {
-			case c.MessageChan <- func() []byte {
-				data, _ := json.Marshal(shutdownMessage)
-				return data
+			case c.MessageChan <- func() *Message {
+				return NewMessageWithEncoding(TextMessage, shutdownMessage, JSON)
 			}():
 			case <-ctx.Done():
 				_ = c.Disconnect()

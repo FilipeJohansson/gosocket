@@ -24,10 +24,11 @@ var (
 	ErrMaxBinarySizeLessThanOne  = errors.New("max binary size must be greater than 0")
 
 	// Client errors
-	ErrClientConnNil  = errors.New("client connection is nil")
-	ErrNoDataToSend   = errors.New("message has no data to send")
-	ErrClientFull     = errors.New("client message channel is full")
-	ErrClientNotFound = errors.New("client not found")
+	ErrClientConnNil   = errors.New("client connection is nil")
+	ErrNoDataToSend    = errors.New("message has no data to send")
+	ErrClientFull      = errors.New("client message channel is full")
+	ErrClientNotFound  = errors.New("client not found")
+	ErrInvalidClientId = errors.New("invalid client id")
 
 	// Server errors
 	ErrServerAlreadyRunning = errors.New("server is already running")
@@ -42,6 +43,7 @@ var (
 	ErrSendMessage       = errors.New("failed to send message")
 	ErrEventFailed       = errors.New("event failed")
 	ErrAuthFailure       = errors.New("authentication failed")
+	ErrClientIdGenerator = errors.New("client id generator failed")
 	ErrTooManyRequests   = errors.New("too many requests")
 	ErrRateLimitExceeded = errors.New("rate limit exceeded")
 
@@ -78,10 +80,6 @@ var (
 	ErrRawEncoding         = errors.New("raw encoding expects []byte data")
 	ErrUnsupportedEncoding = errors.New("unsupported encoding")
 )
-
-func newUnsupportedEncodingError(encoding EncodingType) error {
-	return fmt.Errorf("%w: %d", ErrUnsupportedEncoding, encoding)
-}
 
 func newSerializeError(err error) error {
 	return fmt.Errorf("%w: %w", ErrSerializeData, err)
@@ -133,6 +131,10 @@ func newInvalidPortError(port int) error {
 
 func newAuthFailureError(err error) error {
 	return fmt.Errorf("%w: %w", ErrAuthFailure, err)
+}
+
+func newClientIdGeneratorError(err error) error {
+	return fmt.Errorf("%w: %w", ErrClientIdGenerator, err)
 }
 
 func newMaxDepthExceededError(val int) error {
