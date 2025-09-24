@@ -279,7 +279,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.TrimSpace(clientId) == "" {
-		h.log(LogTypeError, LogLevelError, "Client ID cannot be empty")
+		h.log(LogTypeClient, LogLevelError, "Client ID cannot be empty")
 		http.Error(w, ErrInvalidClientId.Error(), http.StatusInternalServerError)
 		return
 	}

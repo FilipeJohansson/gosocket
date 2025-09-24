@@ -1196,6 +1196,7 @@ func TestServer_RoomManagement(t *testing.T) {
 				}
 				mockHub := NewMockHub()
 				mockHub.On("CreateRoom", mock.AnythingOfType("string"), "test-room").Return(nil)
+				mockHub.On("LeaveAllFromRoom", "test-room").Return(nil)
 				mockHub.On("DeleteRoom", "test-room").Return(nil)
 				mockHub.On("Log", mock.AnythingOfType("LogType"), mock.AnythingOfType("LogLevel"), mock.AnythingOfType("string"), mock.AnythingOfType("[]interface {}"))
 				server.handler.SetHub(mockHub)
@@ -1214,6 +1215,7 @@ func TestServer_RoomManagement(t *testing.T) {
 					t.Fatal(err)
 				}
 				mockHub := NewMockHub()
+				mockHub.On("LeaveAllFromRoom", "non-existing").Return(nil)
 				mockHub.On("DeleteRoom", "non-existing").Return(newRoomNotFoundError("non-existing"))
 				server.handler.SetHub(mockHub)
 				return server

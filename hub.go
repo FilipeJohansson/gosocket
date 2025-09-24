@@ -45,6 +45,18 @@ type IHub interface {
 	// LeaveRoom removes a client from a room.
 	LeaveRoom(client *Client, roomId string)
 
+	// DeleteRoom deletes a room with the given name and returns whether the room was deleted.
+	DeleteRoom(roomId string) error
+
+	// DeleteEmptyRooms deletes all empty rooms from the hub.
+	DeleteEmptyRooms() []string
+
+	// DeleteEmptyRoomsExcluding deletes all empty rooms from the hub, excluding the rooms with the given IDs.
+	DeleteEmptyRoomsExcluding(excludeIds []string) []string
+
+	// LeaveAllFromRoom removes all clients from a room.
+	LeaveAllFromRoom(roomId string) error
+
 	// GetClientsInRoom returns a list of clients in a room.
 	GetClientsInRoom(roomId string) map[string]*Client
 
@@ -61,10 +73,7 @@ type IHub interface {
 	GetRooms() map[string]*Room
 
 	// GetRoom returns a room with the given name.
-	GetRoom(roomId string) *Room
-
-	// DeleteRoom deletes a room with the given name.
-	DeleteRoom(roomId string) error
+	GetRoom(roomId string) (*Room, error)
 
 	// IsRunning returns whether the hub is currently running.
 	IsRunning() bool
@@ -330,7 +339,7 @@ func (h *Hub) CreateRoom(ownerId, roomName string, customId ...string) (*Room, e
 	room := NewRoom(roomId, ownerId, roomName)
 	h.Rooms.Add(room, roomId)
 
-	h.Log(LogTypeOther, LogLevelDebug, "Room created: %s", roomName)
+	h.Log(LogTypeRoom, LogLevelInfo, "Room created: %s", roomName)
 	return room, nil
 }
 
@@ -340,12 +349,12 @@ func (h *Hub) CreateRoom(ownerId, roomName string, customId ...string) (*Room, e
 func (h *Hub) JoinRoom(client *Client, roomId string) error {
 	room, exists := h.Rooms.Get(roomId)
 	if !exists {
-		h.Log(LogTypeOther, LogLevelError, "Room not found: %s", roomId)
+		h.Log(LogTypeRoom, LogLevelError, "Room not found: %s", roomId)
 		return newRoomNotFoundError(roomId)
 	}
 
 	room.AddClient(client)
-	h.Log(LogTypeOther, LogLevelDebug, "Client %s joined room: %s", client.ID, roomId)
+	h.Log(LogTypeRoom, LogLevelInfo, "Room %s: client %s joined", roomId, client.ID)
 	return nil
 }
 
@@ -355,18 +364,93 @@ func (h *Hub) JoinRoom(client *Client, roomId string) error {
 func (h *Hub) LeaveRoom(client *Client, roomId string) {
 	if room, exists := h.Rooms.Get(roomId); exists {
 		if room.RemoveClient(client.ID) {
-			h.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomId)
-
-			// remove room if empty
-			if len(room.Clients()) == 0 {
-				h.Log(LogTypeOther, LogLevelDebug, "Room %s is empty, removing it", roomId)
-				err := h.DeleteRoom(roomId)
-				if err != nil {
-					h.Log(LogTypeOther, LogLevelError, "Error deleting room: %s", err)
-				}
-			}
+			h.Log(LogTypeRoom, LogLevelInfo, "Room %s: client %s left", roomId, client.ID)
 		}
 	}
+}
+
+// DeleteRoom deletes a room with the given name. If the room does not exist, it will return
+// an error. If the room exists, it will remove all clients from the room and remove the room
+// from the hub.
+//
+// This method is safe to call concurrently.
+func (h *Hub) DeleteRoom(roomId string) error {
+	err := h.LeaveAllFromRoom(roomId)
+	if err != nil {
+		return err
+	}
+
+	if h.Rooms.Remove(roomId) {
+		h.Log(LogTypeRoom, LogLevelInfo, "Room deleted: %s", roomId)
+	}
+	return nil
+}
+
+// DeleteEmptyRooms deletes all empty rooms from the hub.
+// Returns a slice of room IDs that were deleted.
+//
+// This method is safe to call concurrently.
+func (h *Hub) DeleteEmptyRooms() []string {
+	var deletedRooms []string
+
+	h.Rooms.ForEach(func(roomId string, room *Room) {
+		if room.IsEmpty() {
+			if err := h.DeleteRoom(roomId); err == nil {
+				deletedRooms = append(deletedRooms, roomId)
+			}
+		}
+	})
+
+	h.Log(LogTypeRoom, LogLevelDebug, "Deleted %d empty rooms", len(deletedRooms))
+	return deletedRooms
+}
+
+// DeleteEmptyRoomsExcluding deletes all empty rooms from the hub, except for the rooms with the given IDs.
+// Returns a slice of room IDs that were deleted.
+//
+// This method is safe to call concurrently.
+func (h *Hub) DeleteEmptyRoomsExcluding(excludeIds []string) []string {
+	var deletedRooms []string
+
+	h.Rooms.ForEach(func(roomId string, room *Room) {
+		excluded := false
+		for _, id := range excludeIds {
+			if roomId == id {
+				excluded = true
+				break
+			}
+		}
+
+		if !excluded && room.IsEmpty() {
+			if err := h.DeleteRoom(roomId); err == nil {
+				deletedRooms = append(deletedRooms, roomId)
+			}
+		}
+	})
+
+	h.Log(LogTypeRoom, LogLevelDebug, "Deleted %d empty rooms", len(deletedRooms))
+	return deletedRooms
+}
+
+// LeaveAllFromRoom removes all clients from the given room. If the room does not exist, an error is returned.
+//
+// This method is safe to call concurrently.
+func (h *Hub) LeaveAllFromRoom(roomId string) error {
+	room, exists := h.Rooms.Get(roomId)
+	if !exists {
+		return newRoomNotFoundError(roomId)
+	}
+
+	var clientsRemoved []string
+	for id := range room.Clients() {
+		if room.RemoveClient(id) {
+			clientsRemoved = append(clientsRemoved, id)
+		}
+	}
+
+	h.Log(LogTypeRoom, LogLevelDebug, "Removed %d clients from room: %s", len(clientsRemoved), roomId)
+	h.Log(LogTypeRoom, LogLevelInfo, "Room %s: all clients left", roomId)
+	return nil
 }
 
 // GetClientsInRoom returns all clients in the specified room. If the room does not exist,
@@ -419,50 +503,22 @@ func (h *Hub) GetClient(id string) *Client {
 	return client
 }
 
-// GetRooms returns a copy of the rooms map, where the keys are the room names and the values
-// are maps with client pointers as keys and booleans indicating whether the client is connected
-// to the room.
+// GetRooms returns a copy of the rooms map, where the keys are the room IDs and the values are the room pointers.
 //
 // This method is safe to call concurrently.
 func (h *Hub) GetRooms() map[string]*Room {
 	return h.Rooms.GetAll()
 }
 
-// GetRoomById returns the room with the given ID. If the room does not exist, nil is returned.
+// GetRoomById returns the room with the given ID. If the room does not exist, an error is returned.
 //
 // This method is safe to call concurrently.
-func (h *Hub) GetRoom(roomId string) *Room {
+func (h *Hub) GetRoom(roomId string) (*Room, error) {
 	room, exists := h.Rooms.Get(roomId)
 	if !exists {
-		return nil
+		return nil, newRoomNotFoundError(roomId)
 	}
-	return room
-}
-
-// DeleteRoom deletes a room with the given name. If the room does not exist, it will return
-// an error. If the room exists, it will remove all clients from the room and remove the room
-// from the hub.
-//
-// This method is safe to call concurrently.
-func (h *Hub) DeleteRoom(roomId string) error {
-	room, exists := h.Rooms.Get(roomId)
-	if !exists {
-		return newRoomNotFoundError(roomId)
-	}
-
-	var clientsToRemove []*Client
-	for _, client := range room.Clients() {
-		clientsToRemove = append(clientsToRemove, client)
-	}
-
-	for _, client := range clientsToRemove {
-		room.RemoveClient(client.ID)
-		h.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomId)
-	}
-
-	h.Rooms.Remove(roomId)
-	h.Log(LogTypeOther, LogLevelDebug, "Room deleted: %s", roomId)
-	return nil
+	return room, nil
 }
 
 // IsRunning returns a boolean indicating whether the hub is currently running.

@@ -16,6 +16,7 @@ const (
 	LogTypeMessage    LogType = "message"    // for messages sent and received
 	LogTypeError      LogType = "error"      // for internal errors and connection errors
 	LogTypeRateLimit  LogType = "ratelimit"  // for rate limit events
+	LogTypeRoom       LogType = "room"       // for room events
 	LogTypeOther      LogType = "other"      // generic
 )
 

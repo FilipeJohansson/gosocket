@@ -890,13 +890,13 @@ func TestIntegration_ProgressiveMessageSizes(t *testing.T) {
 			payload[j] = byte(j % 256)
 		}
 
-		timeout := time.Millisecond + time.Duration(size/1024)*time.Millisecond
+		timeout := time.Duration(size/1024) * time.Millisecond
 		_ = ws.SetWriteDeadline(time.Now().Add(timeout))
 
 		err := ws.WriteMessage(websocket.BinaryMessage, payload)
 		require.NoError(t, err, "Failed to send message %d of size %d", i, size)
 
-		delay := time.Millisecond + time.Duration(size/1024)*time.Millisecond
+		delay := time.Duration(size/1024) * time.Millisecond
 		time.Sleep(delay)
 	}
 
