@@ -35,6 +35,10 @@ type RateLimiterManager struct {
 	ipsMu sync.Mutex
 	ips   map[string]*limiterEntry
 
+	violationsMu      sync.Mutex
+	clientsViolations uint64
+	ipsViolations     uint64
+
 	quit chan struct{}
 }
 
@@ -72,7 +76,14 @@ func (r *RateLimiterManager) AllowClient(clientID string) bool {
 	lim := entry.limiter
 	r.clientsMu.Unlock()
 
-	return lim.Allow()
+	if !lim.Allow() {
+		r.violationsMu.Lock()
+		r.clientsViolations += 1
+		r.violationsMu.Unlock()
+		return false
+	}
+
+	return true
 }
 
 // AllowIP returns true if IP is allowed (token available).
@@ -95,7 +106,14 @@ func (r *RateLimiterManager) AllowIP(ip string) bool {
 	lim := entry.limiter
 	r.ipsMu.Unlock()
 
-	return lim.Allow()
+	if !lim.Allow() {
+		r.violationsMu.Lock()
+		r.ipsViolations += 1
+		r.violationsMu.Unlock()
+		return false
+	}
+
+	return true
 }
 
 // AllowNetAddr is helper: extracts IP from net.Addr (e.g. ws conn.RemoteAddr())
@@ -113,6 +131,12 @@ func (r *RateLimiterManager) AllowNetAddr(addr net.Addr) bool {
 
 func (r *RateLimiterManager) Stop() {
 	close(r.quit)
+}
+
+func (r *RateLimiterManager) GetViolations() uint64 {
+	r.violationsMu.Lock()
+	defer r.violationsMu.Unlock()
+	return r.clientsViolations + r.ipsViolations
 }
 
 func (r *RateLimiterManager) cleanupLoop() {

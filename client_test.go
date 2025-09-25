@@ -200,9 +200,9 @@ func (m *MockHub) GetClientsInRoom(roomId string) map[string]*Client {
 	return room.Clients()
 }
 
-func (m *MockHub) GetStats() map[string]interface{} {
+func (m *MockHub) GetStats() *Stats {
 	args := m.Called()
-	return args.Get(0).(map[string]interface{})
+	return args.Get(0).(*Stats)
 }
 
 func (m *MockHub) GetClients() map[string]*Client {

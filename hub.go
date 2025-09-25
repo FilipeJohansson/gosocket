@@ -49,7 +49,7 @@ type IHub interface {
 	GetClientsInRoom(roomId string) map[string]*Client
 
 	// GetStats returns statistics about the hub.
-	GetStats() map[string]interface{}
+	GetStats() *Stats
 
 	// GetClients returns a list of all connected clients.
 	GetClients() map[string]*Client
@@ -388,19 +388,31 @@ func (h *Hub) GetClientsInRoom(roomId string) map[string]*Client {
 // - rooms: A map with room names as keys and the number of clients in each room as values.
 //
 // This method is safe to call concurrently.
-func (h *Hub) GetStats() map[string]interface{} {
-	stats := make(map[string]interface{})
+func (h *Hub) GetStats() *Stats {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 
-	stats["total_clients"] = h.Clients.Len()
-	stats["total_rooms"] = h.Rooms.Len()
+	//* basic stats
+	totalClients := h.Clients.Len()
+	totalRooms := h.Rooms.Len()
 
-	roomStats := make(map[string]int)
+	//* room stats
+	roomStats := make(map[string]RoomStat)
 	h.Rooms.ForEach(func(id string, room *Room) {
-		roomStats[room.ID()] = len(room.Clients())
+		roomStats[id] = RoomStat{
+			ID:          room.ID(),
+			Name:        room.Name(),
+			ClientCount: len(room.Clients()),
+			OwnerID:     room.OwnerId(),
+			CreatedAt:   room.CreatedAt(),
+		}
 	})
-	stats["rooms"] = roomStats
 
-	return stats
+	return &Stats{
+		ActiveConnections: totalClients,
+		TotalRooms:        totalRooms,
+		RoomStats:         roomStats,
+	}
 }
 
 // GetClients returns a copy of the clients map, where the keys are the client pointers
