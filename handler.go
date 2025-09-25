@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -61,6 +62,8 @@ type Handler struct {
 	connectionPool *ConnectionPool
 	logger         *LoggerConfig
 	rateLimiter    *RateLimiterManager
+
+	stats *HandlerStats
 }
 
 // NewHandler returns a new instance of Handler with default configuration.
@@ -84,6 +87,10 @@ func NewHandler(options ...UniversalOption) (*Handler, error) {
 
 		logger:      l,
 		rateLimiter: rl,
+
+		stats: &HandlerStats{
+			startTime: time.Now(),
+		},
 	}
 
 	for _, o := range options {
@@ -268,6 +275,9 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	//* connection well-established
+	h.incrementTotalConnections()
+
 	var clientId string
 	if h.clientIdGenerator != nil {
 		if clientId, err = h.clientIdGenerator(r, userData); err != nil {
@@ -319,6 +329,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	h.hub.AddClient(client)
 
 	if h.events.OnConnect != nil {
+		h.log(LogTypeConnection, LogLevelInfo, "%s connected: %s, %s", client.ID, client.ConnInfo.ClientIP, client.ConnInfo.UserAgent)
 		if err := h.events.OnConnect(client, connectionHandlerCtx); err != nil {
 			h.log(LogTypeError, LogLevelError, "OnConnect handler error: %v", err)
 			h.hub.RemoveClient(client)
@@ -329,7 +340,6 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		h.log(LogTypeConnection, LogLevelInfo, "%s connected", client.ID)
 	}
 
 	safeGoroutine("ClientWrite", func() {
@@ -348,6 +358,49 @@ func (h *Handler) GetConnectionStats() (int, map[string]int) {
 	return h.connectionPool.GetStats()
 }
 
+func (h *Handler) GetStats() *Stats {
+	//* connection pool stats
+	var connectionsPerIP map[string]int
+	if h.connectionPool != nil {
+		_, connectionsPerIP = h.connectionPool.GetStats()
+	}
+
+	//* system stats
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+
+	//* hub stats
+	hubStats := h.hub.GetStats()
+
+	return &Stats{
+		ActiveConnections: hubStats.ActiveConnections,
+		TotalConnections:  h.stats.totalConnections,
+		ConnectionsPerIP:  connectionsPerIP,
+		ConnectionsPerSec: h.calculateConnectionsPerSec(),
+
+		MessagesSent:     h.stats.messagesSent,
+		MessagesReceived: h.stats.messagesReceived,
+		MessagesPerSec:   h.calculateMessagesPerSec(),
+		BytesSent:        h.stats.bytesSent,
+		BytesReceived:    h.stats.bytesReceived,
+
+		TotalRooms: hubStats.TotalRooms,
+		RoomStats:  hubStats.RoomStats,
+
+		AverageLatency:   h.calculateAverageLatency(),
+		ActiveGoroutines: runtime.NumGoroutine(),
+		MemoryUsage:      memStats.Alloc,
+		Uptime:           time.Since(h.stats.startTime),
+
+		ErrorCount:          h.stats.errorCount,
+		LastError:           h.stats.lastError,
+		DisconnectedClients: h.stats.disconnectedClients,
+		RateLimitViolations: h.getRateLimitViolations(),
+
+		Timestamp: time.Now(),
+	}
+}
+
 // handleClientWrite is a goroutine that writes messages to a client. It reads
 // from the client's MessageChan and writes to the client's websocket connection.
 // If the MessageChan is closed, it sends a CloseMessage to the client and
@@ -357,7 +410,9 @@ func (h *Handler) GetConnectionStats() (int, map[string]int) {
 func (h *Handler) handleClientWrite(client *Client, handlerCtx *Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			h.log(LogTypeError, LogLevelError, "PANIC RECOVERED in handleClientWrite (Client: %s): %v", client.ID, r)
+			panicErr := fmt.Errorf("PANIC RECOVERED in handleClientWrite (Client: %s): %v", client.ID, r)
+			h.log(LogTypeError, LogLevelError, "%s\nStack trace:\n%s\n", panicErr.Error(), string(debug.Stack()))
+			h.incrementErrors(panicErr)
 		}
 	}()
 
@@ -373,7 +428,9 @@ func (h *Handler) handleClientWrite(client *Client, handlerCtx *Context) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					h.log(LogTypeError, LogLevelError, "PANIC RECOVERED closing connection for client %s: %v", client.ID, r)
+					panicErr := fmt.Errorf("PANIC RECOVERED closing connection for client %s: %v", client.ID, r)
+					h.log(LogTypeError, LogLevelError, "%s\nStack trace:\n%s\n", panicErr.Error(), string(debug.Stack()))
+					h.incrementErrors(panicErr)
 				}
 			}()
 
@@ -409,6 +466,7 @@ func (h *Handler) handleClientWrite(client *Client, handlerCtx *Context) {
 			// Set write deadline - if this fails, connection is likely dead
 			if err := conn.SetWriteDeadline(time.Now().Add(h.config.WriteTimeout)); err != nil {
 				h.log(LogTypeError, LogLevelDebug, "%s write deadline error: %v", client.ID, err)
+				h.incrementErrors(err)
 				if h.events.OnError != nil {
 					_ = h.events.OnError(client, newSetWriteDeadlineError(err), handlerCtx)
 				}
@@ -448,8 +506,11 @@ func (h *Handler) handleClientWrite(client *Client, handlerCtx *Context) {
 				return
 			}
 
+			//* Write the message
+			h.incrementMessagesSent(uint64(len(message.RawData)))
 			if err := conn.WriteMessage(wsMessageType, message.RawData); err != nil {
 				h.log(LogTypeMessage, LogLevelError, "%s write error: %v", client.ID, err)
+				h.incrementErrors(err)
 				if h.events.OnError != nil {
 					_ = h.events.OnError(client, err, handlerCtx)
 				}
@@ -499,7 +560,9 @@ func (h *Handler) handleClientWrite(client *Client, handlerCtx *Context) {
 func (h *Handler) handleClientRead(client *Client, handlerCtx *Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			h.log(LogTypeError, LogLevelError, "PANIC RECOVERED in handleClientRead (Client: %s): %v", client.ID, r)
+			panicErr := fmt.Errorf("PANIC RECOVERED in handleClientRead (Client: %s): %v", client.ID, r)
+			h.log(LogTypeError, LogLevelError, "%s\nStack trace:\n%s\n", panicErr.Error(), string(debug.Stack()))
+			h.incrementErrors(panicErr)
 		}
 		h.cleanupClient(client, handlerCtx)
 	}()
@@ -545,14 +608,19 @@ func (h *Handler) handleClientRead(client *Client, handlerCtx *Context) {
 
 			if err := conn.SetReadDeadline(time.Now().Add(h.config.ReadTimeout)); err != nil {
 				h.log(LogTypeError, LogLevelDebug, "%s set read deadline error: %v", client.ID, err)
+				h.incrementErrors(err)
 				if h.events.OnError != nil {
 					_ = h.events.OnError(client, newSetReadDeadlineError(err), handlerCtx)
 				}
 				return
 			}
 
+			//* Read the next message
 			messageType, data, err := conn.ReadMessage()
 			h.log(LogTypeMessage, LogLevelDebug, "%s read: %s", client.ID, string(data))
+
+			h.incrementMessagesReceived(uint64(len(data)))
+
 			select {
 			case messageChan <- struct {
 				messageType int
@@ -599,6 +667,7 @@ func (h *Handler) handleClientRead(client *Client, handlerCtx *Context) {
 
 				if websocket.IsUnexpectedCloseError(msg.err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 					h.log(LogTypeError, LogLevelDebug, "%s read error: %v", client.ID, msg.err)
+					h.incrementErrors(msg.err)
 					if h.events.OnError != nil {
 						_ = h.events.OnError(client, msg.err, handlerCtx)
 					}
@@ -609,6 +678,7 @@ func (h *Handler) handleClientRead(client *Client, handlerCtx *Context) {
 			// Reset read deadline - if this fails, connection might be in bad state
 			if err := conn.SetReadDeadline(time.Now().Add(h.config.PongWait)); err != nil {
 				h.log(LogTypeError, LogLevelDebug, "%s set read deadline error: %v", client.ID, err)
+				h.incrementErrors(err)
 				if h.events.OnError != nil {
 					_ = h.events.OnError(client, newSetReadDeadlineError(err), handlerCtx)
 				}
@@ -637,10 +707,17 @@ func (h *Handler) handleClientRead(client *Client, handlerCtx *Context) {
 // to JSON, and passes the unmarshaled data to the handler. If the OnJSONMessage
 // handler returns an error, it calls the OnError handler if it is not nil.
 func (h *Handler) processMessage(client *Client, message *Message, handlerCtx *Context) {
+	start := time.Now()
+	defer func() {
+		latency := time.Since(start)
+		h.updateLatencyStats(latency)
+	}()
+
 	if h.events.OnMessage != nil {
 		h.log(LogTypeMessage, LogLevelDebug, "%s OnMessage: %s", client.ID, string(message.RawData))
 		if err := h.events.OnMessage(client, message, handlerCtx); err != nil {
 			h.log(LogTypeError, LogLevelDebug, "%s OnMessage error: %v", client.ID, err)
+			h.incrementErrors(err)
 			if h.events.OnError != nil {
 				_ = h.events.OnError(client, newEventFailedError("OnMessage", err), handlerCtx)
 			}
@@ -651,6 +728,7 @@ func (h *Handler) processMessage(client *Client, message *Message, handlerCtx *C
 		h.log(LogTypeMessage, LogLevelDebug, "%s OnRawMessage: %s", client.ID, string(message.RawData))
 		if err := h.events.OnRawMessage(client, message.RawData, handlerCtx); err != nil {
 			h.log(LogTypeError, LogLevelDebug, "%s OnRawMessage error: %v", client.ID, err)
+			h.incrementErrors(err)
 			if h.events.OnError != nil {
 				_ = h.events.OnError(client, newEventFailedError("OnRawMessage", err), handlerCtx)
 			}
@@ -665,6 +743,7 @@ func (h *Handler) processMessage(client *Client, message *Message, handlerCtx *C
 			message.Encoding = JSON
 			if err := h.events.OnJSONMessage(client, jsonData, handlerCtx); err != nil {
 				h.log(LogTypeError, LogLevelDebug, "%s OnJSONMessage error: %v", client.ID, err)
+				h.incrementErrors(err)
 				if h.events.OnError != nil {
 					_ = h.events.OnError(client, newEventFailedError("OnJSONMessage", err), handlerCtx)
 				}
@@ -699,9 +778,13 @@ func (h *Handler) ensureHubRunning(ctx context.Context) {
 func (h *Handler) cleanupClient(client *Client, handlerCtx *Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			h.log(LogTypeError, LogLevelError, "PANIC RECOVERED in cleanup for client %s: %v", client.ID, r)
+			panicErr := fmt.Errorf("PANIC RECOVERED in cleanup for client %s: %v", client.ID, r)
+			h.log(LogTypeError, LogLevelError, "%s\nStack trace:\n%s\n", panicErr.Error(), string(debug.Stack()))
+			h.incrementErrors(panicErr)
 		}
 	}()
+
+	h.incrementDisconnectedClients()
 
 	if h.hub != nil {
 		h.log(LogTypeClient, LogLevelDebug, "Removing client %s from hub", client.ID)
@@ -763,6 +846,108 @@ func (h *Handler) serializeMessageWithEncoding(message *Message) ([]byte, error)
 	}
 
 	return nil, ErrSerializeData
+}
+
+func (h *Handler) incrementTotalConnections() {
+	h.stats.mu.Lock()
+	defer h.stats.mu.Unlock()
+	h.stats.totalConnections++
+}
+
+func (h *Handler) incrementMessagesSent(bytes uint64) {
+	h.stats.mu.Lock()
+	defer h.stats.mu.Unlock()
+	h.stats.messagesSent++
+	h.stats.bytesSent += bytes
+}
+
+func (h *Handler) incrementMessagesReceived(bytes uint64) {
+	h.stats.mu.Lock()
+	defer h.stats.mu.Unlock()
+	h.stats.messagesReceived++
+	h.stats.bytesReceived += bytes
+}
+
+func (h *Handler) incrementErrors(err error) {
+	h.stats.mu.Lock()
+	defer h.stats.mu.Unlock()
+	h.stats.errorCount++
+	h.stats.lastError = err
+}
+
+func (h *Handler) incrementDisconnectedClients() {
+	h.stats.mu.Lock()
+	defer h.stats.mu.Unlock()
+	h.stats.disconnectedClients++
+}
+
+func (h *Handler) calculateConnectionsPerSec() float64 {
+	h.stats.mu.RLock()
+	defer h.stats.mu.RUnlock()
+
+	now := time.Now()
+	if h.stats.lastStatsTime.IsZero() {
+		h.stats.lastStatsTime = now
+		h.stats.lastTotalConns = h.stats.totalConnections
+		return 0
+	}
+
+	elapsed := now.Sub(h.stats.lastStatsTime).Seconds()
+	if elapsed < 1 {
+		return 0
+	}
+
+	rate := float64(h.stats.totalConnections-h.stats.lastTotalConns) / elapsed
+
+	// update to next calculation
+	h.stats.lastStatsTime = now
+	h.stats.lastTotalConns = h.stats.totalConnections
+
+	return rate
+}
+
+func (h *Handler) calculateMessagesPerSec() float64 {
+	h.stats.mu.RLock()
+	defer h.stats.mu.RUnlock()
+
+	now := time.Now()
+	if h.stats.lastStatsTime.IsZero() {
+		h.stats.lastTotalMsgs = h.stats.messagesSent + h.stats.messagesReceived
+		return 0
+	}
+
+	elapsed := now.Sub(h.stats.lastStatsTime).Seconds()
+	if elapsed < 1 {
+		return 0
+	}
+
+	currentTotalMsgs := h.stats.messagesSent + h.stats.messagesReceived
+	rate := float64(currentTotalMsgs-h.stats.lastTotalMsgs) / elapsed
+	h.stats.lastTotalMsgs = currentTotalMsgs
+
+	return rate
+
+}
+
+func (h *Handler) calculateAverageLatency() time.Duration {
+	h.stats.mu.RLock()
+	defer h.stats.mu.RUnlock()
+
+	if h.stats.latencyCount == 0 {
+		return 0
+	}
+	return h.stats.latencySum / time.Duration(h.stats.latencyCount)
+}
+
+func (h *Handler) getRateLimitViolations() uint64 {
+	return h.rateLimiter.GetViolations()
+}
+
+func (h *Handler) updateLatencyStats(latency time.Duration) {
+	h.stats.mu.Lock()
+	defer h.stats.mu.Unlock()
+	h.stats.latencySum += latency
+	h.stats.latencyCount++
 }
 
 // extractHeaders extracts relevant headers from the given http request.

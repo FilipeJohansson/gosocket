@@ -3,19 +3,23 @@
 
 package gosocket
 
+import "time"
+
 type Room struct {
-	id      string
-	ownerId string
-	name    string
-	clients *SharedCollection[*Client, string]
+	id        string
+	ownerId   string
+	name      string
+	clients   *SharedCollection[*Client, string]
+	createdAt time.Time
 }
 
 func NewRoom(id, ownerId, name string) *Room {
 	return &Room{
-		id:      id,
-		ownerId: ownerId,
-		name:    name,
-		clients: NewSharedCollection[*Client, string](),
+		id:        id,
+		ownerId:   ownerId,
+		name:      name,
+		clients:   NewSharedCollection[*Client, string](),
+		createdAt: time.Now(),
 	}
 }
 
@@ -29,6 +33,10 @@ func (r *Room) Name() string {
 
 func (r *Room) OwnerId() string {
 	return r.ownerId
+}
+
+func (r *Room) CreatedAt() time.Time {
+	return r.createdAt
 }
 
 func (r *Room) Clients() map[string]*Client {
