@@ -1299,7 +1299,7 @@ func TestServer_GetRooms(t *testing.T) {
 	}
 }
 
-func TestServer_ClientRoomOperations(t *testing.T) {
+func TestServer_RoomOperations(t *testing.T) {
 	tests := []struct {
 		name            string
 		setupServer     func() *Server
@@ -1385,6 +1385,85 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 			isExpectedError: true,
 			expectedError:   newClientNotFoundError("non-existing"),
 		},
+		{
+			name: "fails to create room when room name is empty",
+			setupServer: func() *Server {
+				server, err := NewServer()
+				if err != nil {
+					t.Fatal(err)
+				}
+				hub := NewHub(DefaultLoggerConfig())
+				server.handler.SetHub(hub)
+				return server
+			},
+			operation:       "create",
+			clientID:        "test-client",
+			room:            "",
+			isExpectedError: true,
+			expectedError:   ErrRoomNameEmpty,
+		},
+		{
+			name: "deletes the room",
+			setupServer: func() *Server {
+				server, err := NewServer()
+				if err != nil {
+					t.Fatal(err)
+				}
+				hub := NewHub(DefaultLoggerConfig())
+
+				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
+				hub.Clients.Add(client, client.ID)
+
+				_, _ = hub.CreateRoom("test-client", "test-room")
+
+				server.handler.SetHub(hub)
+				return server
+			},
+			operation:       "delete",
+			clientID:        "test-client",
+			room:            "test-room",
+			isExpectedError: false,
+		},
+		{
+			name: "fails to create room that id already exists",
+			setupServer: func() *Server {
+				server, err := NewServer()
+				if err != nil {
+					t.Fatal(err)
+				}
+				hub := NewHub(DefaultLoggerConfig())
+
+				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
+				hub.Clients.Add(client, client.ID)
+
+				_, _ = hub.CreateRoom("test-client", "test-room")
+
+				server.handler.SetHub(hub)
+				return server
+			},
+			operation:       "create",
+			clientID:        "test-client",
+			room:            "test-room",
+			isExpectedError: true,
+			expectedError:   ErrRoomAlreadyExists,
+		},
+		{
+			name: "fails to delete non-existing room",
+			setupServer: func() *Server {
+				server, err := NewServer()
+				if err != nil {
+					t.Fatal(err)
+				}
+				hub := NewHub(DefaultLoggerConfig())
+				server.handler.SetHub(hub)
+				return server
+			},
+			operation:       "delete",
+			clientID:        "test-client",
+			room:            "non-existing",
+			isExpectedError: true,
+			expectedError:   newRoomNotFoundError("non-existing"),
+		},
 	}
 
 	for _, tt := range tests {
@@ -1397,6 +1476,10 @@ func TestServer_ClientRoomOperations(t *testing.T) {
 				err = server.JoinRoom(tt.clientID, tt.room)
 			case "leave":
 				err = server.LeaveRoom(tt.clientID, tt.room)
+			case "delete":
+				err = server.DeleteRoom(tt.room)
+			case "create":
+				_, err = server.CreateRoom(tt.room)
 			}
 
 			if !tt.isExpectedError {

@@ -1,0 +1,4 @@
+comment:
+  layout: "reach,diff,files"
+  behavior: once
+  require_changes: false
