@@ -156,7 +156,7 @@ func (m *MockHub) CreateRoom(ownerId, roomName string, customId ...string) (*Roo
 	room := NewRoom(roomId, ownerId, roomName)
 	m.Rooms.Add(room, roomId)
 
-	m.Log(LogTypeOther, LogLevelDebug, "Room created: %s", roomName)
+	m.Log(LogTypeRoom, LogLevelInfo, "Room created: %s", roomName)
 	return room, nil
 }
 
@@ -164,12 +164,12 @@ func (m *MockHub) JoinRoom(client *Client, roomId string) error {
 	m.Called(client, roomId)
 	room, exists := m.Rooms.Get(roomId)
 	if !exists {
-		m.Log(LogTypeOther, LogLevelError, "Room not found: %s", roomId)
+		m.Log(LogTypeRoom, LogLevelError, "Room not found: %s", roomId)
 		return newRoomNotFoundError(roomId)
 	}
 
 	room.AddClient(client)
-	m.Log(LogTypeOther, LogLevelDebug, "Client %s joined room: %s", client.ID, roomId)
+	m.Log(LogTypeRoom, LogLevelInfo, "Room %s: client %s joined", roomId, client.ID)
 	return nil
 }
 
@@ -177,18 +177,81 @@ func (m *MockHub) LeaveRoom(client *Client, roomId string) {
 	m.Called(client, roomId)
 	if room, exists := m.Rooms.Get(roomId); exists {
 		if room.RemoveClient(client.ID) {
-			m.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomId)
-
-			// remove room if empty
-			if len(room.Clients()) == 0 {
-				m.Log(LogTypeOther, LogLevelDebug, "Room %s is empty, removing it", roomId)
-				err := m.DeleteRoom(roomId)
-				if err != nil {
-					m.Log(LogTypeOther, LogLevelError, "Error deleting room: %s", err)
-				}
-			}
+			m.Log(LogTypeRoom, LogLevelInfo, "Room %s: client %s left", roomId, client.ID)
 		}
 	}
+}
+
+func (m *MockHub) DeleteRoom(roomId string) error {
+	m.Called(roomId)
+	err := m.LeaveAllFromRoom(roomId)
+	if err != nil {
+		return err
+	}
+
+	if m.Rooms.Remove(roomId) {
+		m.Log(LogTypeRoom, LogLevelInfo, "Room deleted: %s", roomId)
+	}
+	return nil
+}
+
+func (m *MockHub) DeleteEmptyRooms() []string {
+	m.Called()
+	var deletedRooms []string
+
+	m.Rooms.ForEach(func(roomId string, room *Room) {
+		if room.IsEmpty() {
+			if err := m.DeleteRoom(roomId); err == nil {
+				deletedRooms = append(deletedRooms, roomId)
+			}
+		}
+	})
+
+	m.Log(LogTypeRoom, LogLevelDebug, "Deleted %d empty rooms", len(deletedRooms))
+	return deletedRooms
+}
+
+func (m *MockHub) DeleteEmptyRoomsExcluding(excludeIds []string) []string {
+	m.Called(excludeIds)
+	var deletedRooms []string
+
+	m.Rooms.ForEach(func(roomId string, room *Room) {
+		excluded := false
+		for _, id := range excludeIds {
+			if roomId == id {
+				excluded = true
+				break
+			}
+		}
+
+		if !excluded && room.IsEmpty() {
+			if err := m.DeleteRoom(roomId); err == nil {
+				deletedRooms = append(deletedRooms, roomId)
+			}
+		}
+	})
+
+	m.Log(LogTypeRoom, LogLevelDebug, "Deleted %d empty rooms", len(deletedRooms))
+	return deletedRooms
+}
+
+func (m *MockHub) LeaveAllFromRoom(roomId string) error {
+	m.Called(roomId)
+	room, exists := m.Rooms.Get(roomId)
+	if !exists {
+		return newRoomNotFoundError(roomId)
+	}
+
+	var clientsRemoved []string
+	for id := range room.Clients() {
+		if room.RemoveClient(id) {
+			clientsRemoved = append(clientsRemoved, id)
+		}
+	}
+
+	m.Log(LogTypeRoom, LogLevelDebug, "Removed %d clients from room: %s", len(clientsRemoved), roomId)
+	m.Log(LogTypeRoom, LogLevelInfo, "Room %s: all clients left", roomId)
+	return nil
 }
 
 func (m *MockHub) GetClientsInRoom(roomId string) map[string]*Client {
@@ -224,35 +287,13 @@ func (m *MockHub) GetRooms() map[string]*Room {
 	return m.Rooms.GetAll()
 }
 
-func (m *MockHub) GetRoom(roomId string) *Room {
+func (m *MockHub) GetRoom(roomId string) (*Room, error) {
 	m.Called(roomId)
 	room, exists := m.Rooms.Get(roomId)
 	if !exists {
-		return nil
+		return nil, newRoomNotFoundError(roomId)
 	}
-	return room
-}
-
-func (m *MockHub) DeleteRoom(roomId string) error {
-	m.Called(roomId)
-	room, exists := m.Rooms.Get(roomId)
-	if !exists {
-		return newRoomNotFoundError(roomId)
-	}
-
-	var clientsToRemove []*Client
-	for _, client := range room.Clients() {
-		clientsToRemove = append(clientsToRemove, client)
-	}
-
-	for _, client := range clientsToRemove {
-		room.RemoveClient(client.ID)
-		m.Log(LogTypeOther, LogLevelDebug, "Client %s left room: %s", client.ID, roomId)
-	}
-
-	m.Rooms.Remove(roomId)
-	m.Log(LogTypeOther, LogLevelDebug, "Room deleted: %s", roomId)
-	return nil
+	return room, nil
 }
 
 func (m *MockHub) IsRunning() bool {

@@ -151,7 +151,7 @@ func (s *Server) Start() (err error) {
 	}
 
 	if len(s.handler.Serializers()) <= 0 {
-		s.handler.log(LogTypeServer, LogLevelDebug, "No serializers configured, using JSON as default serializer")
+		s.handler.log(LogTypeServer, LogLevelWarn, "No serializers configured, using JSON as default serializer")
 		s.handler.AddSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig())) // JSON as default serializer
 	}
 
@@ -191,6 +191,7 @@ func (s *Server) Start() (err error) {
 		s.server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		err = s.server.ListenAndServeTLS(s.config.CertFile, s.config.KeyFile)
 	} else {
+		s.handler.log(LogTypeServer, LogLevelWarn, "SSL disabled")
 		err = s.server.ListenAndServe()
 	}
 
@@ -224,7 +225,7 @@ func (s *Server) StartWithContext(ctx context.Context) (err error) {
 	}
 
 	if len(s.handler.Serializers()) <= 0 {
-		s.handler.log(LogTypeServer, LogLevelDebug, "No serializers configured, using JSON as default serializer")
+		s.handler.log(LogTypeServer, LogLevelWarn, "No serializers configured, using JSON as default serializer")
 		s.handler.AddSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig())) // JSON as default serializer
 	}
 
@@ -255,6 +256,7 @@ func (s *Server) StartWithContext(ctx context.Context) (err error) {
 			s.server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 			serverErr = s.server.ListenAndServeTLS(s.config.CertFile, s.config.KeyFile)
 		} else {
+			s.handler.log(LogTypeServer, LogLevelWarn, "SSL disabled")
 			serverErr = s.server.ListenAndServe()
 		}
 

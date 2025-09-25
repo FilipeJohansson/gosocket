@@ -54,3 +54,7 @@ func (r *Room) RemoveClient(id string) bool {
 func (r *Room) GetClient(id string) (*Client, bool) {
 	return r.clients.Get(id)
 }
+
+func (r *Room) IsEmpty() bool {
+	return r.clients.Len() == 0
+}
