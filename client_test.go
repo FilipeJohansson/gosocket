@@ -709,11 +709,11 @@ func TestClient_GetRooms(t *testing.T) {
 				client := NewClient("test", &MockWebSocketConn{}, hub, 256)
 
 				// Manually add client to rooms for testing
-				_, _ = hub.CreateRoom("__SERVER__", "room1")
-				_, _ = hub.CreateRoom("__SERVER__", "room2")
+				_, _ = hub.CreateRoom("__SERVER__", "room1", "room1")
+				_, _ = hub.CreateRoom("__SERVER__", "room2", "room2")
 				_ = hub.JoinRoom(client, "room1")
 				_ = hub.JoinRoom(client, "room2")
-				_, _ = hub.CreateRoom("__SERVER__", "room3")
+				_, _ = hub.CreateRoom("__SERVER__", "room3", "room3")
 
 				return client
 			},

@@ -5,6 +5,8 @@ package gosocket
 
 import (
 	"context"
+	"fmt"
+	"hash/fnv"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -327,9 +329,21 @@ func (h *Hub) CreateRoom(ownerId, roomName string, customId ...string) (*Room, e
 		return nil, ErrRoomNameEmpty
 	}
 
-	roomId := roomName
+	var roomId string
 	if len(customId) > 0 && customId[0] != "" {
 		roomId = customId[0]
+	} else {
+		for {
+			hash := fnv.New64a()
+			_, err := hash.Write([]byte(roomName + fmt.Sprint(time.Now().UnixNano())))
+			if err != nil {
+				return nil, err
+			}
+			roomId = fmt.Sprintf("%x", hash.Sum64())
+			if _, exists := h.Rooms.Get(roomId); !exists {
+				break
+			}
+		}
 	}
 
 	if _, exists := h.Rooms.Get(roomId); exists {
