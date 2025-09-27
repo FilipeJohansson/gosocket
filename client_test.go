@@ -502,6 +502,7 @@ func TestClient_SendMessage(t *testing.T) {
 			mockHub := NewMockHub()
 
 			mockHub.On("AddClient", mock.Anything)
+			mockHub.On("RemoveClient", mock.Anything)
 			mockHub.On("SendToClient", mock.Anything, mock.Anything, mock.Anything)
 			mockHub.On("GetClient", mock.Anything)
 			mockHub.On("Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -882,6 +883,7 @@ func TestClient_MessageChannelCapacity(t *testing.T) {
 	mockHub := NewMockHub()
 
 	mockHub.On("AddClient", mock.Anything)
+	mockHub.On("RemoveClient", mock.Anything)
 	mockHub.On("SendToClient", mock.Anything, mock.Anything, mock.Anything)
 	mockHub.On("GetClient", mock.Anything)
 	mockHub.On("Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
