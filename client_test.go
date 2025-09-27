@@ -502,6 +502,7 @@ func TestClient_SendMessage(t *testing.T) {
 			mockHub := NewMockHub()
 
 			mockHub.On("AddClient", mock.Anything)
+			mockHub.On("RemoveClient", mock.Anything)
 			mockHub.On("SendToClient", mock.Anything, mock.Anything, mock.Anything)
 			mockHub.On("GetClient", mock.Anything)
 			mockHub.On("Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -709,11 +710,11 @@ func TestClient_GetRooms(t *testing.T) {
 				client := NewClient("test", &MockWebSocketConn{}, hub, 256)
 
 				// Manually add client to rooms for testing
-				_, _ = hub.CreateRoom("__SERVER__", "room1")
-				_, _ = hub.CreateRoom("__SERVER__", "room2")
+				_, _ = hub.CreateRoom("__SERVER__", "room1", "room1")
+				_, _ = hub.CreateRoom("__SERVER__", "room2", "room2")
 				_ = hub.JoinRoom(client, "room1")
 				_ = hub.JoinRoom(client, "room2")
-				_, _ = hub.CreateRoom("__SERVER__", "room3")
+				_, _ = hub.CreateRoom("__SERVER__", "room3", "room3")
 
 				return client
 			},
@@ -882,6 +883,7 @@ func TestClient_MessageChannelCapacity(t *testing.T) {
 	mockHub := NewMockHub()
 
 	mockHub.On("AddClient", mock.Anything)
+	mockHub.On("RemoveClient", mock.Anything)
 	mockHub.On("SendToClient", mock.Anything, mock.Anything, mock.Anything)
 	mockHub.On("GetClient", mock.Anything)
 	mockHub.On("Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
