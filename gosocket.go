@@ -5,6 +5,7 @@ package gosocket
 
 import (
 	"time"
+	"github.com/FilipeJohansson/gosocket/cluster"
 )
 
 // ===== Functional Options =====
@@ -136,6 +137,18 @@ func WithProtobufSerializer() UniversalOption {
 // will be used if no other serializer is specified.
 func WithRawSerializer() UniversalOption {
 	return WithSerializer(Raw, CreateSerializer(Raw, DefaultSerializerConfig()))
+}
+
+// WithCluster configures a ClusterManager for the handler's hub. Passing nil
+// resets the hub to use a no-op cluster manager.
+func WithCluster(c cluster.ClusterManager) UniversalOption {
+	return func(h HasHandler) error {
+		if h == nil || h.Handler() == nil || h.Handler().Hub() == nil {
+			return nil
+		}
+		h.Handler().Hub().SetCluster(c)
+		return nil
+	}
 }
 
 // WithMiddleware adds a middleware to the handler. The middleware will be

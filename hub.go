@@ -10,6 +10,8 @@ import (
 	"runtime/debug"
 	"sync"
 	"time"
+
+	"github.com/FilipeJohansson/gosocket/cluster"
 )
 
 // IHub is an interface for a hub that manages client connections and rooms.
@@ -77,6 +79,10 @@ type IHub interface {
 	// GetRoom returns a room with the given name.
 	GetRoom(roomId string) (*Room, error)
 
+	// SetCluster configures a ClusterManager for the hub so it can publish/subscribe
+	// cluster events. Passing nil resets to a no-op manager.
+	SetCluster(c cluster.ClusterManager)
+
 	// IsRunning returns whether the hub is currently running.
 	IsRunning() bool
 
@@ -92,6 +98,11 @@ type Hub struct {
 	mu         sync.RWMutex
 	running    bool
 
+	// clustering
+	Cluster    cluster.ClusterManager
+	NodeID     string
+	clusterSub chan *cluster.ClusterEvent
+
 	logger *LoggerConfig
 }
 
@@ -100,6 +111,10 @@ type Hub struct {
 // The created Hub instance will have empty maps for the clients and rooms.
 // The Register, Unregister and Broadcast channels will be created with a default buffer size.
 func NewHub(logger *LoggerConfig) *Hub {
+	if logger == nil {
+		logger = DefaultLoggerConfig()
+	}
+
 	return &Hub{
 		Clients:    NewSharedCollection[*Client, string](),
 		Rooms:      NewSharedCollection[*Room, string](),
@@ -107,6 +122,8 @@ func NewHub(logger *LoggerConfig) *Hub {
 		Unregister: make(chan *Client),
 		Broadcast:  make(chan *Message),
 		logger:     logger,
+		NodeID:     fmt.Sprintf("%d", time.Now().UnixNano()), // TODO: make configurable
+		Cluster:    cluster.NewNoopManager(),
 	}
 }
 
@@ -279,6 +296,19 @@ func (h *Hub) SendToClient(fromClientId, toClientId string, message *Message) er
 		message.Created = time.Now()
 	}
 
+	// publish to cluster so other nodes can deliver to remote clients
+	if h.Cluster != nil {
+		evt := &cluster.ClusterEvent{
+			Type:         cluster.EventType(cluster.EventSendToClient),
+			Raw:          message.RawData,
+			To:           toClientId,
+			From:         fromClientId,
+			Encoding:     int(message.Encoding),
+			OriginNodeID: h.NodeID,
+		}
+		safeGoroutine("PublishClusterEvent", func() { h.Cluster.PublishEvent(evt) })
+	}
+
 	h.Log(LogTypeMessage, LogLevelDebug, "Sending message from %s to %s", fromClientId, toClientId)
 
 	select {
@@ -298,6 +328,22 @@ func (h *Hub) SendToClient(fromClientId, toClientId string, message *Message) er
 //
 // It is a shorthand for calling Broadcast(h, message).
 func (h *Hub) BroadcastMessage(message *Message) {
+	if message == nil {
+		return
+	}
+
+	// publish to cluster for HA/replication
+	if h.Cluster != nil {
+		evt := &cluster.ClusterEvent{
+			Type:         cluster.EventType(cluster.EventBroadcastAll),
+			Raw:          message.RawData,
+			From:         message.From,
+			Encoding:     int(message.Encoding),
+			OriginNodeID: h.NodeID,
+		}
+		safeGoroutine("PublishClusterEvent", func() { h.Cluster.PublishEvent(evt) })
+	}
+
 	h.Broadcast <- message
 }
 
@@ -311,6 +357,19 @@ func (h *Hub) BroadcastToRoom(roomId string, message *Message) error {
 	if !exists {
 		h.Log(LogTypeBroadcast, LogLevelError, "Room not found: %s", roomId)
 		return newRoomNotFoundError(roomId)
+	}
+
+	// publish to cluster so other nodes can deliver to their local clients
+	if h.Cluster != nil {
+		evt := &cluster.ClusterEvent{
+			Type:         cluster.EventType(cluster.EventBroadcastRoom),
+			Raw:          message.RawData,
+			Room:         roomId,
+			From:         message.From,
+			Encoding:     int(message.Encoding),
+			OriginNodeID: h.NodeID,
+		}
+		safeGoroutine("PublishClusterEvent", func() { h.Cluster.PublishEvent(evt) })
 	}
 
 	clientsCopy := room.Clients()
@@ -545,6 +604,70 @@ func (h *Hub) GetRoom(roomId string) (*Room, error) {
 		return nil, newRoomNotFoundError(roomId)
 	}
 	return room, nil
+}
+
+// SetCluster configures the hub to use the provided ClusterManager. It will
+// register the hub as a node and start a goroutine that listens for incoming
+// cluster events and applies them to the local hub state.
+func (h *Hub) SetCluster(c cluster.ClusterManager) {
+	if c == nil {
+		c = cluster.NewNoopManager()
+	}
+	h.Cluster = c
+	h.clusterSub = make(chan *cluster.ClusterEvent, 256)
+	var err = h.Cluster.RegisterNode(h.NodeID, h.clusterSub)
+	if err != nil {
+		h.Log(LogTypeError, LogLevelError, "Failed to register cluster node: %v", err) // TODO: handle error properly
+		return
+	}
+
+	go func() {
+		for evt := range h.clusterSub {
+			if evt == nil || evt.OriginNodeID == h.NodeID { // ignore own events
+				continue
+			}
+
+			msg := &Message{
+				RawData:  evt.Raw,
+				Encoding: EncodingType(evt.Encoding),
+				From:     evt.From,
+				To:       evt.To,
+				Room:     evt.Room,
+				Created:  time.Now(),
+			}
+
+			switch evt.Type {
+			case cluster.EventBroadcastAll:
+				clients := h.Clients.GetAll()
+				h.mu.RLock()
+				h.broadcastToClients(msg, clients)
+				h.mu.RUnlock()
+
+			case cluster.EventBroadcastRoom:
+				room, exists := h.Rooms.Get(evt.Room)
+				if !exists {
+					continue
+				}
+				clientsCopy := room.Clients()
+				h.mu.RLock()
+				h.broadcastToClients(msg, clientsCopy)
+				h.mu.RUnlock()
+
+			case cluster.EventSendToClient:
+				toClient := h.GetClient(evt.To)
+				if toClient == nil {
+					continue
+				}
+				select {
+				case toClient.MessageChan <- msg:
+				default:
+					safeGoroutine("Client.Disconnect", func() {
+						_ = toClient.Disconnect()
+					})
+				}
+			}
+		}
+	}()
 }
 
 // IsRunning returns a boolean indicating whether the hub is currently running.

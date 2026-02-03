@@ -9,6 +9,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/FilipeJohansson/gosocket/cluster"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -592,6 +593,21 @@ func TestServer_WithAuth(t *testing.T) {
 	}
 
 	assert.NotNil(t, server.handler.AuthFunc())
+}
+
+func TestServer_WithCluster(t *testing.T) {
+	mem := cluster.NewMemoryManager()
+
+	server, err := NewServer(WithCluster(mem))
+	assert.NoError(t, err)
+	assert.NotNil(t, server)
+
+	hub := server.Handler().Hub()
+	// concrete implementation should be *Hub
+	impl, ok := hub.(*Hub)
+	assert.True(t, ok, "expected handler hub to be *Hub, got %T", hub)
+	// cluster manager should be the same instance passed in
+	assert.Equal(t, mem, impl.Cluster)
 }
 
 func TestServer_EventHandlers(t *testing.T) {

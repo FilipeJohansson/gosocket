@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FilipeJohansson/gosocket/cluster"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
@@ -2045,4 +2046,68 @@ func TestIntegration_AttachToCtx(t *testing.T) {
 	_, resp_msg, err := ws.ReadMessage()
 	require.NoError(t, err)
 	require.Equal(t, []byte("test"), resp_msg)
+}
+
+func TestINtegration_CLusterReplicationBetweenHubs(t *testing.T) {
+	mem := cluster.NewMemoryManager()
+
+	h1 := NewHub(DefaultLoggerConfig())
+	h2 := NewHub(DefaultLoggerConfig())
+
+	h1.SetCluster(mem)
+	h2.SetCluster(mem)
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+
+	go h1.Run(ctx1)
+	go h2.Run(ctx2)
+
+	// create clients and register them
+	c1 := NewClient("c1", nil, h1, 16)
+	c2 := NewClient("c2", nil, h2, 16)
+
+	h1.AddClient(c1)
+	h2.AddClient(c2)
+
+	// wait for registration
+	time.Sleep(20 * time.Millisecond)
+
+	// ensure both hubs have a single client registered
+	if got := h1.Clients.Len(); got != 1 {
+		t.Fatalf("expected h1 to have 1 client, got %d", got)
+	}
+	if got := h2.Clients.Len(); got != 1 {
+		t.Fatalf("expected h2 to have 1 client, got %d", got)
+	}
+
+	msg := NewRawMessage(TextMessage, []byte("cluster-test"))
+
+	h1.BroadcastMessage(msg)
+
+	// expect both local (c1) and remote (c2) clients to receive the broadcast
+	got1, got2 := false, false
+	deadline := time.After(300 * time.Millisecond)
+	for !(got1 && got2) {
+		select {
+		case m := <-c1.MessageChan:
+			if string(m.RawData) != "cluster-test" {
+				t.Fatalf("c1 unexpected payload: %s", string(m.RawData))
+			}
+			got1 = true
+		case m := <-c2.MessageChan:
+			if string(m.RawData) != "cluster-test" {
+				t.Fatalf("c2 unexpected payload: %s", string(m.RawData))
+			}
+			got2 = true
+		case <-deadline:
+			t.Fatalf("timed out waiting for replicated messages (got1=%v got2=%v)", got1, got2)
+		}
+	}
+
+	// cleanup
+	h1.Stop()
+	h2.Stop()
 }

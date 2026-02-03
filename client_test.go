@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FilipeJohansson/gosocket/cluster"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -303,6 +304,10 @@ func (m *MockHub) IsRunning() bool {
 
 func (m *MockHub) Log(logType LogType, level LogLevel, format string, args ...interface{}) {
 	m.Called(logType, level, format, args)
+}
+
+func (m *MockHub) SetCluster(c cluster.ClusterManager) {
+	m.Called(c)
 }
 
 func TestNewClient(t *testing.T) {
