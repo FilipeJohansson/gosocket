@@ -5,7 +5,6 @@ package gosocket
 
 import (
 	"time"
-	"github.com/FilipeJohansson/gosocket/cluster"
 )
 
 // ===== Functional Options =====
@@ -141,7 +140,7 @@ func WithRawSerializer() UniversalOption {
 
 // WithCluster configures a ClusterManager for the handler's hub. Passing nil
 // resets the hub to use a no-op cluster manager.
-func WithCluster(c cluster.ClusterManager) UniversalOption {
+func WithCluster(c ClusterConfig) UniversalOption {
 	return func(h HasHandler) error {
 		if h == nil || h.Handler() == nil || h.Handler().Hub() == nil {
 			return nil

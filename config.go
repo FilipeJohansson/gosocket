@@ -5,6 +5,8 @@ package gosocket
 
 import (
 	"time"
+
+	"github.com/FilipeJohansson/gosocket/cluster"
 )
 
 type LoggerConfig struct {
@@ -121,4 +123,25 @@ func DefaultServerConfig() *ServerConfig {
 		EnableCORS: true,
 		EnableSSL:  false,
 	}
+}
+
+// HubConfig holds configuration for creating a Hub.
+// NodeID, if provided, will be used as the hub's identifier. If empty,
+// `NewHub` will attempt to read `GOSOCKET_NODE_ID` from the environment
+// and fall back to a generated ID.
+type HubConfig struct {
+	Logger *LoggerConfig
+	NodeID string
+}
+
+// DefaultHubConfig returns a minimal HubConfig with a default logger.
+func DefaultHubConfig() *HubConfig {
+	return &HubConfig{
+		Logger: DefaultLoggerConfig(),
+	}
+}
+
+type ClusterConfig struct {
+	Manager cluster.ClusterManager
+	NodeID  string
 }

@@ -75,7 +75,7 @@ func NewHandler(options ...UniversalOption) (*Handler, error) {
 	l := DefaultLoggerConfig()
 
 	h := &Handler{
-		hub:         NewHub(l),
+		hub:         NewHub(&HubConfig{Logger: l}),
 		config:      DefaultHandlerConfig(),
 		events:      &Events{},
 		serializers: make(map[EncodingType]Serializer),
@@ -480,9 +480,16 @@ func (h *Handler) handleClientWrite(client *Client, handlerCtx *Context) {
 
 			var wsMessageType int
 			switch message.Type {
+			case TextMessage:
+				wsMessageType = websocket.TextMessage
 			case BinaryMessage:
 				wsMessageType = websocket.BinaryMessage
-			case TextMessage:
+			case PingMessage:
+				wsMessageType = websocket.PingMessage
+			case PongMessage:
+				wsMessageType = websocket.PongMessage
+			case CloseMessage:
+				wsMessageType = websocket.CloseMessage
 			default:
 				wsMessageType = websocket.TextMessage
 			}

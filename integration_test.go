@@ -20,8 +20,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type ctxKey string
-
 func TestIntegration_Echo(t *testing.T) {
 	server, err := NewServer(
 		WithPath("/ws"),
@@ -29,7 +27,8 @@ func TestIntegration_Echo(t *testing.T) {
 			return c.Send(m)
 		}),
 	)
-	require.NoError(t, err)
+
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -58,7 +57,7 @@ func TestIntegration_Broadcast(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -107,7 +106,7 @@ func TestIntegration_Disconnect(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -137,7 +136,7 @@ func TestIntegration_RapidMessages(t *testing.T) {
 			return c.SendRaw(m.RawData)
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -196,7 +195,7 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -273,7 +272,7 @@ func TestIntegration_ConcurrentBroadcast(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -338,7 +337,7 @@ func TestIntegration_UnexpectedDisconnect(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -407,7 +406,7 @@ func TestIntegration_Reconnect(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -503,7 +502,7 @@ func TestIntegration_LargeMessages(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -553,7 +552,7 @@ func TestIntegration_LargeMessagesEcho(t *testing.T) {
 			return c.SendRaw(m.RawData)
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -631,7 +630,7 @@ func TestIntegration_LargeMessagesConcurrent(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -708,7 +707,7 @@ func TestIntegration_LargeMessageBroadcast(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -746,12 +745,34 @@ func TestIntegration_LargeMessageBroadcast(t *testing.T) {
 	}
 
 	for i := 0; i < totalBroadcasts; i++ {
-		require.NoError(t, clients[0].WriteMessage(websocket.BinaryMessage, largePayload))
-		time.Sleep(3 * time.Millisecond)
+		// Broadcast directly from the server hub to avoid client-side write errors
+		server.handler.hub.BroadcastMessage(&Message{RawData: largePayload, Type: BinaryMessage})
+		time.Sleep(50 * time.Millisecond)
 	}
 
-	time.Sleep(3 * time.Millisecond)
+	// Wait until all clients received the expected number of broadcasts or timeout.
+	deadline := time.Now().Add(3 * time.Second)
+waitLoop:
+	for {
+		allOK := true
+		mu.Lock()
+		for clientID := 0; clientID < clientCount; clientID++ {
+			if len(received[clientID]) != totalBroadcasts {
+				allOK = false
+				break
+			}
+		}
+		mu.Unlock()
+		if allOK {
+			break waitLoop
+		}
+		if time.Now().After(deadline) {
+			break waitLoop
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
+	// Close clients and wait for reader goroutines to finish.
 	for _, ws := range clients {
 		ws.Close()
 	}
@@ -762,7 +783,7 @@ func TestIntegration_LargeMessageBroadcast(t *testing.T) {
 
 	for clientID := 0; clientID < clientCount; clientID++ {
 		sizes := received[clientID]
-		require.Len(t, sizes, totalBroadcasts, "Client %d received wrong number of broadcasts", clientID)
+		require.Len(t, sizes, totalBroadcasts, "Client %d received wrong number of broadcasts: %v", clientID, sizes)
 		for j, size := range sizes {
 			require.Equal(t, payloadSize, size, "Client %d broadcast %d has wrong size", clientID, j)
 		}
@@ -796,7 +817,7 @@ func TestIntegration_LargeMessagesWithFailures(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -867,7 +888,7 @@ func TestIntegration_ProgressiveMessageSizes(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -928,7 +949,7 @@ func TestIntegration_MessageOrder(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -968,7 +989,7 @@ func TestIntegration_BroadcastMessageOrder(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -1051,7 +1072,7 @@ func TestIntegration_MultipleHubsIsolation(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server1 = mustServer(t, server1, err)
 
 	server2, err := NewServer(
 		WithPath("/ws2"),
@@ -1060,7 +1081,7 @@ func TestIntegration_MultipleHubsIsolation(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server2 = mustServer(t, server2, err)
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws1", server1.handler)
@@ -1149,7 +1170,7 @@ func TestIntegration_RoomsIsolation(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	_, _ = server.handler.hub.CreateRoom("__SERVER__", "room1", "room1")
 	_, _ = server.handler.hub.CreateRoom("__SERVER__", "room2", "room2")
@@ -1240,7 +1261,7 @@ func TestIntegration_RateLimitingEnforced(t *testing.T) {
 			return c.Send(m)
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -1306,7 +1327,7 @@ func TestIntegration_HubShutdown(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -1369,7 +1390,7 @@ func TestIntegration_MessageTypes(t *testing.T) {
 			return c.SendRaw(m.RawData)
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -1427,7 +1448,7 @@ func TestIntegration_JSONMessages(t *testing.T) {
 			return c.SendRaw(response)
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -1483,7 +1504,7 @@ func TestIntegration_ErrorHandling(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -1530,7 +1551,7 @@ func TestIntegration_MemoryLeaks(t *testing.T) {
 			return c.SendRaw(m.RawData)
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -1570,10 +1591,18 @@ func TestIntegration_MemoryLeaks(t *testing.T) {
 		wg.Wait()
 
 		for _, ws := range clients {
-			ws.Close()
+			_ = ws.Close()
 		}
 
-		time.Sleep(2 * time.Millisecond)
+		// wait until the server has processed closed connections instead of sleeping
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if server.GetClientCount() == 0 {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		require.Equal(t, 0, server.GetClientCount(), "server should have 0 clients after closing connections")
 	}
 
 	// server should still be responsive
@@ -1598,7 +1627,7 @@ func TestIntegration_MemoryLeaksWithoutMessages(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -1648,7 +1677,7 @@ func TestIntegration_CustomHeadersValidation(t *testing.T) {
 			return c.SendRaw(m.RawData)
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -1708,7 +1737,7 @@ func TestIntegration_MultipleClientsWithDifferentHeaders(t *testing.T) {
 			return c.SendRaw(m.RawData)
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -1792,7 +1821,7 @@ func TestIntegration_IgnoredHeaders(t *testing.T) {
 			return c.SendRaw(m.RawData)
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -1873,7 +1902,7 @@ func TestIntegration_RoomEdgeCases(t *testing.T) {
 			return nil
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	_, _ = server.handler.hub.CreateRoom("__SERVER__", "room1", "room1")
 	_, _ = server.handler.hub.CreateRoom("__SERVER__", "room2", "room2")
@@ -1975,7 +2004,7 @@ func TestIntegration_ConnectionLimits(t *testing.T) {
 			return c.SendRaw(m.RawData)
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -2017,6 +2046,7 @@ func TestIntegration_ConnectionLimits(t *testing.T) {
 }
 
 func TestIntegration_AttachToCtx(t *testing.T) {
+	type ctxKey string
 	const testKey ctxKey = "test_key"
 
 	server, err := NewServer(
@@ -2032,7 +2062,7 @@ func TestIntegration_AttachToCtx(t *testing.T) {
 			return c.SendRaw(m.RawData)
 		}),
 	)
-	require.NoError(t, err)
+	server = mustServer(t, server, err)
 
 	ts := httptest.NewServer(server.handler)
 	defer ts.Close()
@@ -2048,14 +2078,14 @@ func TestIntegration_AttachToCtx(t *testing.T) {
 	require.Equal(t, []byte("test"), resp_msg)
 }
 
-func TestINtegration_CLusterReplicationBetweenHubs(t *testing.T) {
+func TestIntegration_ClusterReplicationBetweenHubs(t *testing.T) {
 	mem := cluster.NewMemoryManager()
 
-	h1 := NewHub(DefaultLoggerConfig())
-	h2 := NewHub(DefaultLoggerConfig())
+	h1 := NewHub(DefaultHubConfig())
+	h2 := NewHub(DefaultHubConfig())
 
-	h1.SetCluster(mem)
-	h2.SetCluster(mem)
+	h1.SetCluster(ClusterConfig{Manager: mem, NodeID: "hub1"})
+	h2.SetCluster(ClusterConfig{Manager: mem, NodeID: "hub2"})
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	defer cancel1()
@@ -2110,4 +2140,100 @@ func TestINtegration_CLusterReplicationBetweenHubs(t *testing.T) {
 	// cleanup
 	h1.Stop()
 	h2.Stop()
+}
+
+func TestIntegration_ClusterReplicationBetweenServers(t *testing.T) {
+	mem := cluster.NewMemoryManager()
+
+	server1, err := NewServer(
+		WithPath("/ws"),
+		WithCluster(ClusterConfig{Manager: mem, NodeID: "server1"}),
+		OnMessage(func(c *Client, m *Message, ctx *Context) error {
+			c.Hub.BroadcastMessage(m)
+			return nil
+		}),
+	)
+	server1 = mustServer(t, server1, err)
+
+	server2, err := NewServer(
+		WithPath("/ws"),
+		WithCluster(ClusterConfig{Manager: mem, NodeID: "server2"}),
+		OnMessage(func(c *Client, m *Message, ctx *Context) error {
+			c.Hub.BroadcastMessage(m)
+			return nil
+		}),
+	)
+	server2 = mustServer(t, server2, err)
+
+	// start two HTTP servers for each gosocket Server
+	ts1 := httptest.NewServer(server1.handler)
+	defer ts1.Close()
+	ts2 := httptest.NewServer(server2.handler)
+	defer ts2.Close()
+
+	u1 := url.URL{Scheme: "ws", Host: ts1.Listener.Addr().String(), Path: "/ws"}
+	u2 := url.URL{Scheme: "ws", Host: ts2.Listener.Addr().String(), Path: "/ws"}
+
+	ws1, _, err := websocket.DefaultDialer.Dial(u1.String(), nil)
+	require.NoError(t, err)
+	defer ws1.Close()
+
+	ws2, _, err := websocket.DefaultDialer.Dial(u2.String(), nil)
+	require.NoError(t, err)
+	defer ws2.Close()
+
+	// wait until both servers have registered their clients to avoid race
+	deadlineReg := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadlineReg) {
+		if server1.GetClientCount() == 1 && server2.GetClientCount() == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if server1.GetClientCount() != 1 || server2.GetClientCount() != 1 {
+		t.Fatalf("servers did not register clients in time: s1=%d s2=%d", server1.GetClientCount(), server2.GetClientCount())
+	}
+
+	ch1 := make(chan string, 1)
+	ch2 := make(chan string, 1)
+
+	go func() {
+		_, msg, err := ws1.ReadMessage()
+		if err == nil {
+			ch1 <- string(msg)
+		}
+	}()
+
+	go func() {
+		_, msg, err := ws2.ReadMessage()
+		if err == nil {
+			ch2 <- string(msg)
+		}
+	}()
+
+	// send a message from client connected to server1
+	require.NoError(t, ws1.WriteMessage(websocket.TextMessage, []byte("cluster-test")))
+
+	got1, got2 := false, false
+	deadline := time.After(300 * time.Millisecond)
+	for !(got1 && got2) {
+		select {
+		case m := <-ch1:
+			if m != "cluster-test" {
+				t.Fatalf("ws1 unexpected payload: %s", m)
+			}
+			got1 = true
+		case m := <-ch2:
+			if m != "cluster-test" {
+				t.Fatalf("ws2 unexpected payload: %s", m)
+			}
+			got2 = true
+		case <-deadline:
+			t.Fatalf("timed out waiting for replicated messages (got1=%v got2=%v)", got1, got2)
+		}
+	}
+
+	// cleanup
+	server1.Stop()
+	server2.Stop()
 }

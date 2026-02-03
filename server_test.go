@@ -12,7 +12,17 @@ import (
 	"github.com/FilipeJohansson/gosocket/cluster"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
+
+func mustServer(t *testing.T, s *Server, err error) *Server {
+	t.Helper()
+	require.NoError(t, err)
+	if s != nil {
+		t.Cleanup(func() { _ = s.Stop() })
+	}
+	return s
+}
 
 func TestNewServer(t *testing.T) {
 	tests := []struct {
@@ -31,9 +41,7 @@ func TestNewServer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, err := NewServer()
-			if err != nil {
-				t.Fatal(err)
-			}
+			server = mustServer(t, server, err)
 			tt.expected(server)
 		})
 	}
@@ -81,7 +89,7 @@ func TestServer_WithPort(t *testing.T) {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), ErrInvalidPort.Error())
 			} else {
-				assert.NoError(t, err)
+				server = mustServer(t, server, err)
 				if tt.expected != nil {
 					tt.expected(server)
 				}
@@ -122,9 +130,7 @@ func TestServer_WithPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, err := NewServer(WithPath(tt.path))
-			if err != nil {
-				t.Fatal(err)
-			}
+			server = mustServer(t, server, err)
 			tt.expected(server)
 		})
 	}
@@ -155,9 +161,7 @@ func TestServer_WithCORS(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, err := NewServer(WithCORS(tt.enabled))
-			if err != nil {
-				t.Fatal(err)
-			}
+			server = mustServer(t, server, err)
 			tt.expected(server)
 		})
 	}
@@ -198,7 +202,7 @@ func TestServer_WithSSL(t *testing.T) {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), ErrSSLFilesEmpty.Error())
 			} else {
-				assert.NoError(t, err)
+				server = mustServer(t, server, err)
 				if tt.expected != nil {
 					tt.expected(server)
 				}
@@ -243,7 +247,7 @@ func TestServer_WithMaxConnections(t *testing.T) {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), ErrMaxConnectionsLessThanOne.Error())
 			} else {
-				assert.NoError(t, err)
+				server = mustServer(t, server, err)
 				if tt.expected != nil {
 					tt.expected(server)
 				}
@@ -288,7 +292,7 @@ func TestServer_WithMessageSize(t *testing.T) {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), ErrMessageSizeLessThanOne.Error())
 			} else {
-				assert.NoError(t, err)
+				server = mustServer(t, server, err)
 				if tt.expected != nil {
 					tt.expected(server)
 				}
@@ -338,7 +342,7 @@ func TestServer_WithTimeout(t *testing.T) {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), ErrTimeoutsLessThanOne.Error())
 			} else {
-				assert.NoError(t, err)
+				server = mustServer(t, server, err)
 				if tt.expected != nil {
 					tt.expected(server)
 				}
@@ -398,7 +402,7 @@ func TestServer_WithPingPong(t *testing.T) {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectError.Error())
 			} else {
-				assert.NoError(t, err)
+				server = mustServer(t, server, err)
 				if tt.expected != nil {
 					tt.expected(server)
 				}
@@ -432,9 +436,7 @@ func TestServer_WithAllowedOrigins(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, err := NewServer(WithAllowedOrigins(tt.origins))
-			if err != nil {
-				t.Fatal(err)
-			}
+			server = mustServer(t, server, err)
 			tt.expected(server)
 		})
 	}
@@ -472,9 +474,7 @@ func TestServer_WithEncoding(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, err := NewServer(WithEncoding(tt.encoding))
-			if err != nil {
-				t.Fatal(err)
-			}
+			server = mustServer(t, server, err)
 			tt.expected(server)
 		})
 	}
@@ -522,9 +522,7 @@ func TestServer_WithSerializer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, err := NewServer(WithSerializer(tt.encoding, tt.serializer))
-			if err != nil {
-				t.Fatal(err)
-			}
+			server = mustServer(t, server, err)
 			tt.expected(server)
 		})
 	}
@@ -532,9 +530,7 @@ func TestServer_WithSerializer(t *testing.T) {
 
 func TestServer_WithJSONSerializer(t *testing.T) {
 	server, err := NewServer(WithJSONSerializer())
-	if err != nil {
-		t.Fatal(err)
-	}
+	server = mustServer(t, server, err)
 
 	ser, exists := server.handler.Serializers()[JSON]
 	assert.True(t, exists)
@@ -543,9 +539,7 @@ func TestServer_WithJSONSerializer(t *testing.T) {
 
 func TestServer_WithRawSerializer(t *testing.T) {
 	server, err := NewServer(WithRawSerializer())
-	if err != nil {
-		t.Fatal(err)
-	}
+	server = mustServer(t, server, err)
 
 	ser, exists := server.handler.Serializers()[Raw]
 	assert.True(t, exists)
@@ -571,9 +565,7 @@ func TestServer_WithMiddleware(t *testing.T) {
 		WithMiddleware(middleware1),
 		WithMiddleware(middleware2),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	server = mustServer(t, server, err)
 
 	assert.Len(t, server.handler.Middlewares(), 2)
 }
@@ -588,9 +580,7 @@ func TestServer_WithAuth(t *testing.T) {
 	}
 
 	server, err := NewServer(WithAuth(authFunc))
-	if err != nil {
-		t.Fatal(err)
-	}
+	server = mustServer(t, server, err)
 
 	assert.NotNil(t, server.handler.AuthFunc())
 }
@@ -598,9 +588,8 @@ func TestServer_WithAuth(t *testing.T) {
 func TestServer_WithCluster(t *testing.T) {
 	mem := cluster.NewMemoryManager()
 
-	server, err := NewServer(WithCluster(mem))
-	assert.NoError(t, err)
-	assert.NotNil(t, server)
+	server, err := NewServer(WithCluster(ClusterConfig{Manager: mem}))
+	server = mustServer(t, server, err)
 
 	hub := server.Handler().Hub()
 	// concrete implementation should be *Hub
@@ -684,9 +673,7 @@ func TestServer_EventHandlers(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, err := NewServer()
-			if err != nil {
-				t.Fatal(err)
-			}
+			server = mustServer(t, server, err)
 			_ = tt.setup(server)
 			tt.validate(server)
 		})
@@ -705,9 +692,7 @@ func TestServer_Broadcast(t *testing.T) {
 			name: "broadcasts message successfully",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -720,9 +705,7 @@ func TestServer_Broadcast(t *testing.T) {
 			name: "fails when server not initialized",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				server.handler = nil
 				return server
 			},
@@ -734,9 +717,7 @@ func TestServer_Broadcast(t *testing.T) {
 			name: "fails when hub is nil",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				server.handler.SetHub(nil)
 				return server
 			},
@@ -776,9 +757,7 @@ func TestServer_BroadcastMessage(t *testing.T) {
 			name: "broadcasts message successfully",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -791,9 +770,7 @@ func TestServer_BroadcastMessage(t *testing.T) {
 			name: "fails when server not initialized",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				server.handler = nil
 				return server
 			},
@@ -833,9 +810,7 @@ func TestServer_BroadcastJSON(t *testing.T) {
 			name: "broadcasts JSON successfully",
 			setupServer: func() *Server {
 				server, err := NewServer(WithJSONSerializer())
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -848,9 +823,7 @@ func TestServer_BroadcastJSON(t *testing.T) {
 			name: "fails with invalid JSON data",
 			setupServer: func() *Server {
 				server, err := NewServer(WithJSONSerializer())
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				server.handler.SetHub(mockHub)
 				return server
@@ -892,9 +865,7 @@ func TestServer_BroadcastToRoom(t *testing.T) {
 			name: "broadcasts to room successfully",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastToRoom", "test-room", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -908,9 +879,7 @@ func TestServer_BroadcastToRoom(t *testing.T) {
 			name: "fails when server not initialized",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				server.handler = nil
 				return server
 			},
@@ -952,9 +921,7 @@ func TestServer_BroadcastToRoomJSON(t *testing.T) {
 			name: "broadcasts JSON to room successfully",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastToRoom", "test-room", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -968,9 +935,7 @@ func TestServer_BroadcastToRoomJSON(t *testing.T) {
 			name: "fails with invalid JSON data",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				server.handler.SetHub(mockHub)
 				return server
@@ -1010,9 +975,7 @@ func TestServer_GetClients(t *testing.T) {
 			name: "returns empty slice when hub is nil",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				server.handler.SetHub(nil)
 				return server
 			},
@@ -1022,10 +985,8 @@ func TestServer_GetClients(t *testing.T) {
 			name: "returns clients from hub",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
-				hub := NewHub(DefaultLoggerConfig())
+				server = mustServer(t, server, err)
+				hub := NewHub(DefaultHubConfig())
 
 				// Add some mock clients
 				client1 := NewClient("client1", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
@@ -1062,10 +1023,8 @@ func TestServer_GetClient(t *testing.T) {
 			name: "finds existing client",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
-				hub := NewHub(DefaultLoggerConfig())
+				server = mustServer(t, server, err)
+				hub := NewHub(DefaultHubConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				hub.Clients.Add(client, client.ID)
@@ -1080,10 +1039,8 @@ func TestServer_GetClient(t *testing.T) {
 			name: "returns nil for non-existing client",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
-				hub := NewHub(DefaultLoggerConfig())
+				server = mustServer(t, server, err)
+				hub := NewHub(DefaultHubConfig())
 				server.handler.SetHub(hub)
 				return server
 			},
@@ -1117,9 +1074,7 @@ func TestServer_GetClientCount(t *testing.T) {
 			name: "returns 0 when hub is nil",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				server.handler.SetHub(nil)
 				return server
 			},
@@ -1129,10 +1084,8 @@ func TestServer_GetClientCount(t *testing.T) {
 			name: "returns correct client count",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
-				hub := NewHub(DefaultLoggerConfig())
+				server = mustServer(t, server, err)
+				hub := NewHub(DefaultHubConfig())
 
 				// Add some mock clients
 				client1 := NewClient("client1", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
@@ -1174,9 +1127,7 @@ func TestServer_RoomManagement(t *testing.T) {
 			name: "creates room successfully",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				mockHub.On("CreateRoom", mock.AnythingOfType("string"), "test-room")
 				mockHub.On("Log", mock.AnythingOfType("LogType"), mock.AnythingOfType("LogLevel"), mock.AnythingOfType("string"), mock.AnythingOfType("[]interface {}"))
@@ -1191,9 +1142,7 @@ func TestServer_RoomManagement(t *testing.T) {
 			name: "fails to create room with empty name",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				mockHub.On("CreateRoom", mock.AnythingOfType("string"), "").Return(ErrRoomNameEmpty)
 				server.handler.SetHub(mockHub)
@@ -1208,9 +1157,7 @@ func TestServer_RoomManagement(t *testing.T) {
 			name: "deletes room successfully",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				mockHub.On("CreateRoom", mock.AnythingOfType("string"), "test-room").Return(nil)
 				mockHub.On("LeaveAllFromRoom", "test-room").Return(nil)
@@ -1228,9 +1175,7 @@ func TestServer_RoomManagement(t *testing.T) {
 			name: "fails to delete non-existing room",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				mockHub.On("LeaveAllFromRoom", "non-existing").Return(nil)
 				mockHub.On("DeleteRoom", "non-existing").Return(newRoomNotFoundError("non-existing"))
@@ -1246,10 +1191,8 @@ func TestServer_RoomManagement(t *testing.T) {
 			name: "fails to create room that id already exists",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
-				hub := NewHub(DefaultLoggerConfig())
+				server = mustServer(t, server, err)
+				hub := NewHub(DefaultHubConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				hub.Clients.Add(client, client.ID)
@@ -1269,10 +1212,8 @@ func TestServer_RoomManagement(t *testing.T) {
 			name: "deletes the room",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
-				hub := NewHub(DefaultLoggerConfig())
+				server = mustServer(t, server, err)
+				hub := NewHub(DefaultHubConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				hub.Clients.Add(client, client.ID)
@@ -1290,10 +1231,8 @@ func TestServer_RoomManagement(t *testing.T) {
 			name: "fails to delete non-existing room",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
-				hub := NewHub(DefaultLoggerConfig())
+				server = mustServer(t, server, err)
+				hub := NewHub(DefaultHubConfig())
 				server.handler.SetHub(hub)
 				return server
 			},
@@ -1344,9 +1283,7 @@ func TestServer_GetRooms(t *testing.T) {
 			name: "returns empty slice when hub is nil",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				server.handler.SetHub(nil)
 				return server
 			},
@@ -1356,9 +1293,7 @@ func TestServer_GetRooms(t *testing.T) {
 			name: "returns room names",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 
 				_, _ = server.CreateRoom("room1")
 				_, _ = server.CreateRoom("room2")
@@ -1394,10 +1329,8 @@ func TestServer_RoomOperations(t *testing.T) {
 			name: "joins room successfully",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
-				hub := NewHub(DefaultLoggerConfig())
+				server = mustServer(t, server, err)
+				hub := NewHub(DefaultHubConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				hub.Clients.Add(client, client.ID)
@@ -1416,10 +1349,8 @@ func TestServer_RoomOperations(t *testing.T) {
 			name: "fails to join room with non-existing client",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
-				hub := NewHub(DefaultLoggerConfig())
+				server = mustServer(t, server, err)
+				hub := NewHub(DefaultHubConfig())
 				server.handler.SetHub(hub)
 				return server
 			},
@@ -1433,10 +1364,8 @@ func TestServer_RoomOperations(t *testing.T) {
 			name: "leaves room successfully",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
-				hub := NewHub(DefaultLoggerConfig())
+				server = mustServer(t, server, err)
+				hub := NewHub(DefaultHubConfig())
 
 				client := NewClient("test-client", &MockWebSocketConn{}, hub, server.handler.config.MessageChanBufSize)
 				hub.Clients.Add(client, client.ID)
@@ -1453,10 +1382,8 @@ func TestServer_RoomOperations(t *testing.T) {
 			name: "fails to leave room with non-existing client",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
-				hub := NewHub(DefaultLoggerConfig())
+				server = mustServer(t, server, err)
+				hub := NewHub(DefaultHubConfig())
 				server.handler.SetHub(hub)
 				return server
 			},
@@ -1502,9 +1429,7 @@ func TestServer_DisconnectClient(t *testing.T) {
 			name: "disconnects client successfully",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 
 				mockConn := &MockWebSocketConn{}
@@ -1527,9 +1452,7 @@ func TestServer_DisconnectClient(t *testing.T) {
 			name: "fails to disconnect non-existing client",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 
 				mockHub.On("GetClients")
@@ -1572,9 +1495,7 @@ func TestServer_Stop(t *testing.T) {
 			name: "fails when server is not running",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				server.isRunning = false
 				return server
 			},
@@ -1585,9 +1506,7 @@ func TestServer_Stop(t *testing.T) {
 			name: "fails when server is nil",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				server.isRunning = true
 				server.server = nil
 				return server
@@ -1624,9 +1543,7 @@ func TestServer_BroadcastData(t *testing.T) {
 			name: "broadcasts data with JSON serializer",
 			setupServer: func() *Server {
 				server, err := NewServer(WithJSONSerializer())
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -1639,9 +1556,7 @@ func TestServer_BroadcastData(t *testing.T) {
 			name: "falls back to JSON when no serializer",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				server.handler.SetDefaultEncoding(Raw) // No serializer for Raw
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
@@ -1684,9 +1599,7 @@ func TestServer_BroadcastDataWithEncoding(t *testing.T) {
 			name: "broadcasts with JSON encoding",
 			setupServer: func() *Server {
 				server, err := NewServer(WithJSONSerializer())
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -1700,9 +1613,7 @@ func TestServer_BroadcastDataWithEncoding(t *testing.T) {
 			name: "fails with unsupported encoding",
 			setupServer: func() *Server {
 				server, err := NewServer()
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				server.handler.SetHub(mockHub)
 				return server
@@ -1747,9 +1658,7 @@ func TestServer_ValidateValue(t *testing.T) {
 					WithJSONSerializer(),
 					WithMaxDepth(5),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value:       "hello world",
@@ -1763,9 +1672,7 @@ func TestServer_ValidateValue(t *testing.T) {
 					WithMaxDepth(5),
 					WithMaxKeys(3),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value: map[string]string{
@@ -1782,9 +1689,7 @@ func TestServer_ValidateValue(t *testing.T) {
 					WithMaxDepth(5),
 					WithMaxKeys(2),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value: map[string]string{
@@ -1803,9 +1708,7 @@ func TestServer_ValidateValue(t *testing.T) {
 					WithMaxDepth(5),
 					WithMaxElements(5),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value:       []string{"item1", "item2", "item3"},
@@ -1819,9 +1722,7 @@ func TestServer_ValidateValue(t *testing.T) {
 					WithMaxDepth(5),
 					WithMaxElements(2),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value:       []string{"item1", "item2", "item3"},
@@ -1836,9 +1737,7 @@ func TestServer_ValidateValue(t *testing.T) {
 					WithMaxDepth(1),
 					WithMaxKeys(10),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value: map[string]interface{}{
@@ -1857,9 +1756,7 @@ func TestServer_ValidateValue(t *testing.T) {
 					WithMaxDepth(5),
 					WithMaxElements(5),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value:       [3]int{1, 2, 3},
@@ -1872,9 +1769,7 @@ func TestServer_ValidateValue(t *testing.T) {
 					WithJSONSerializer(),
 					WithMaxDepth(5),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value:       (*string)(nil),
@@ -1887,9 +1782,7 @@ func TestServer_ValidateValue(t *testing.T) {
 					WithJSONSerializer(),
 					WithMaxDepth(5),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value: struct {
@@ -1944,9 +1837,7 @@ func TestServer_ValidateType(t *testing.T) {
 					WithJSONSerializer(),
 					WithMaxDepth(5),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value:       "string",
@@ -1959,9 +1850,7 @@ func TestServer_ValidateType(t *testing.T) {
 					WithJSONSerializer(),
 					WithMaxDepth(5),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value:       func() {},
@@ -1975,9 +1864,7 @@ func TestServer_ValidateType(t *testing.T) {
 					WithJSONSerializer(),
 					WithMaxDepth(5),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value:       make(chan int),
@@ -1991,9 +1878,7 @@ func TestServer_ValidateType(t *testing.T) {
 					WithJSONSerializer(),
 					WithMaxDepth(5),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value:       unsafe.Pointer(&struct{}{}),
@@ -2007,9 +1892,7 @@ func TestServer_ValidateType(t *testing.T) {
 					WithJSONSerializer(),
 					WithMaxDepth(5),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value: func() interface{} {
@@ -2025,9 +1908,7 @@ func TestServer_ValidateType(t *testing.T) {
 					WithJSONSerializer(),
 					WithMaxDepth(5),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value: func() interface{} {
@@ -2045,9 +1926,7 @@ func TestServer_ValidateType(t *testing.T) {
 					WithMaxDepth(5),
 					WithDisallowedTypes([]string{"chan"}),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value:       make(chan int),
@@ -2061,9 +1940,7 @@ func TestServer_ValidateType(t *testing.T) {
 					WithJSONSerializer(),
 					WithMaxDepth(1),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			value:       [][]string{{"nested"}},
@@ -2117,9 +1994,7 @@ func TestServer_JSONUnmarshal(t *testing.T) {
 					WithMaxKeys(10),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			jsonData: `{"name": "test", "age": 25}`,
@@ -2139,9 +2014,7 @@ func TestServer_JSONUnmarshal(t *testing.T) {
 					WithMaxElements(5),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			jsonData: `["item1", "item2", "item3"]`,
@@ -2156,9 +2029,7 @@ func TestServer_JSONUnmarshal(t *testing.T) {
 			name: "fails with empty data",
 			setupServer: func() *Server {
 				server, err := NewServer(WithJSONSerializer())
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			jsonData:        "",
@@ -2173,9 +2044,7 @@ func TestServer_JSONUnmarshal(t *testing.T) {
 					WithJSONSerializer(),
 					WithMaxBinarySize(10),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			jsonData:        `{"very_long_key_name": "very long value that exceeds the limit"}`,
@@ -2190,9 +2059,7 @@ func TestServer_JSONUnmarshal(t *testing.T) {
 					WithJSONSerializer(),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			jsonData:        `{"name": "test", "age": }`,
@@ -2207,9 +2074,7 @@ func TestServer_JSONUnmarshal(t *testing.T) {
 					WithJSONSerializer(),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			jsonData:        `{"name": "test"}`,
@@ -2226,9 +2091,7 @@ func TestServer_JSONUnmarshal(t *testing.T) {
 					WithMaxKeys(2),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			jsonData:        `{"key1": "val1", "key2": "val2", "key3": "val3"}`,
@@ -2244,9 +2107,7 @@ func TestServer_JSONUnmarshal(t *testing.T) {
 					WithStrictSerialization(true),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			jsonData: `{"name": "test", "age": 25}`,
@@ -2271,9 +2132,7 @@ func TestServer_JSONUnmarshal(t *testing.T) {
 					WithStrictSerialization(true),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			jsonData: `{"name": "test", "unknown_field": "value"}`,
@@ -2326,9 +2185,7 @@ func TestServer_RawMarshal(t *testing.T) {
 					WithRawSerializer(),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			data:            []byte("hello world"),
@@ -2342,9 +2199,7 @@ func TestServer_RawMarshal(t *testing.T) {
 					WithRawSerializer(),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			data:            "string data",
@@ -2358,9 +2213,7 @@ func TestServer_RawMarshal(t *testing.T) {
 					WithRawSerializer(),
 					WithMaxBinarySize(5),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			data:            []byte("hello world"),
@@ -2374,9 +2227,7 @@ func TestServer_RawMarshal(t *testing.T) {
 					WithRawSerializer(),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			data:            []byte{},
@@ -2390,9 +2241,7 @@ func TestServer_RawMarshal(t *testing.T) {
 					WithRawSerializer(),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			data:            []byte{0x00, 0x01, 0x02, 0xFF},
@@ -2442,9 +2291,7 @@ func TestServer_RawUnmarshal(t *testing.T) {
 					WithRawSerializer(),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			data:   []byte("hello world"),
@@ -2462,9 +2309,7 @@ func TestServer_RawUnmarshal(t *testing.T) {
 					WithRawSerializer(),
 					WithMaxBinarySize(5),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			data:            []byte("hello world"),
@@ -2479,9 +2324,7 @@ func TestServer_RawUnmarshal(t *testing.T) {
 					WithRawSerializer(),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			data:            []byte("hello world"),
@@ -2496,9 +2339,7 @@ func TestServer_RawUnmarshal(t *testing.T) {
 					WithRawSerializer(),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			data:   []byte{},
@@ -2516,9 +2357,7 @@ func TestServer_RawUnmarshal(t *testing.T) {
 					WithRawSerializer(),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			data:   []byte{0x00, 0x01, 0x02, 0xFF},
@@ -2540,9 +2379,7 @@ func TestServer_RawUnmarshal(t *testing.T) {
 					WithRawSerializer(),
 					WithMaxBinarySize(1024),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			data:            []byte("hello world"),
@@ -2595,9 +2432,7 @@ func TestServer_SerializationIntegration(t *testing.T) {
 					WithMaxKeys(3),
 					WithMaxElements(5),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				mockHub := NewMockHub()
 				mockHub.On("BroadcastMessage", mock.AnythingOfType("*gosocket.Message"))
 				server.handler.SetHub(mockHub)
@@ -2619,9 +2454,7 @@ func TestServer_SerializationIntegration(t *testing.T) {
 					WithMaxDepth(1),
 					WithMaxKeys(1),
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				server = mustServer(t, server, err)
 				return server
 			},
 			operation: func(s *Server) error {

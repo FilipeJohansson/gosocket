@@ -21,10 +21,17 @@ lint:
 
 test:
 	@echo Running tests...
-# 	go test -race -coverprofile=$(COVERAGE_FILE) $(PKG)
 	go test -v -coverprofile=$(COVERAGE_FILE) $(PKG)
 
 test-verbose:
+	@echo Running tests...
+	go test -v -coverprofile=$(COVERAGE_FILE) $(PKG)
+
+test-race:
+	@echo Running tests...
+	go test -race -coverprofile=$(COVERAGE_FILE) $(PKG)
+
+test-race-verbose:
 	@echo Running tests...
 	go test -v -race -coverprofile=$(COVERAGE_FILE) $(PKG)
 

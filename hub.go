@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"os"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -81,7 +82,7 @@ type IHub interface {
 
 	// SetCluster configures a ClusterManager for the hub so it can publish/subscribe
 	// cluster events. Passing nil resets to a no-op manager.
-	SetCluster(c cluster.ClusterManager)
+	SetCluster(c ClusterConfig)
 
 	// IsRunning returns whether the hub is currently running.
 	IsRunning() bool
@@ -110,10 +111,17 @@ type Hub struct {
 //
 // The created Hub instance will have empty maps for the clients and rooms.
 // The Register, Unregister and Broadcast channels will be created with a default buffer size.
-func NewHub(logger *LoggerConfig) *Hub {
+func NewHub(cfg *HubConfig) *Hub {
+	if cfg == nil {
+		cfg = DefaultHubConfig()
+	}
+
+	logger := cfg.Logger
 	if logger == nil {
 		logger = DefaultLoggerConfig()
 	}
+
+	nodeID := getNodeID(cfg.NodeID)
 
 	return &Hub{
 		Clients:    NewSharedCollection[*Client, string](),
@@ -122,7 +130,7 @@ func NewHub(logger *LoggerConfig) *Hub {
 		Unregister: make(chan *Client),
 		Broadcast:  make(chan *Message),
 		logger:     logger,
-		NodeID:     fmt.Sprintf("%d", time.Now().UnixNano()), // TODO: make configurable
+		NodeID:     nodeID,
 		Cluster:    cluster.NewNoopManager(),
 	}
 }
@@ -609,11 +617,24 @@ func (h *Hub) GetRoom(roomId string) (*Room, error) {
 // SetCluster configures the hub to use the provided ClusterManager. It will
 // register the hub as a node and start a goroutine that listens for incoming
 // cluster events and applies them to the local hub state.
-func (h *Hub) SetCluster(c cluster.ClusterManager) {
-	if c == nil {
-		c = cluster.NewNoopManager()
+func (h *Hub) SetCluster(c ClusterConfig) {
+	if h.running {
+		h.Log(LogTypeError, LogLevelError, "SetCluster cannot be called while the hub is running")
+		return
 	}
-	h.Cluster = c
+
+	if c.Manager == nil {
+		c.Manager = cluster.NewNoopManager()
+	}
+	h.NodeID = getNodeID(c.NodeID)
+
+	// unregister previous node if any
+	if h.Cluster != nil {
+		h.Cluster.UnregisterNode(h.NodeID)
+	}
+
+	// set new cluster manager
+	h.Cluster = c.Manager
 	h.clusterSub = make(chan *cluster.ClusterEvent, 256)
 	var err = h.Cluster.RegisterNode(h.NodeID, h.clusterSub)
 	if err != nil {
@@ -740,8 +761,19 @@ func (h *Hub) broadcastToClients(message *Message, clients map[string]*Client) {
 			case client.MessageChan <- message:
 				// success
 			default:
-				h.Log(LogTypeBroadcast, LogLevelDebug, "Client %s channel full/closed, marking for removal", client.ID)
-				clientsToRemove = append(clientsToRemove, client)
+				// If a client's message channel is full, don't remove the client immediately
+				// (removing can close the connection and cause upstream writers to fail).
+				// Instead, drop this message for the specific client and log the event.
+				// TODO: Backpressure recommendations for production:
+				//   - Use bounded per-client queues with a configurable drop policy (drop oldest/newest)
+				//     and expose counters/metrics for dropped messages.
+				//   - Add a circuit-breaker to disconnect or throttle clients that are chronically slow.
+				//   - Implement credit/window-based flow control (ACKs) for critical/ordered delivery.
+				//   - Support upstream backpressure (return 429 / block producers with timeouts) when
+				//     the hub is overloaded, to avoid head-of-line blocking and uncontrolled backlog.
+				//   - Classify/prioritize messages so non-critical telemetry can be dropped under pressure.
+				//   - For very large payloads, use chunking/streaming and reassembly to avoid memory/IO spikes.
+				h.Log(LogTypeBroadcast, LogLevelDebug, "Client %s channel full/closed, dropping message", client.ID)
 			}
 		}()
 	}
@@ -794,4 +826,17 @@ func (h *Hub) safeCloseChannel(ch interface{}) {
 			close(c)
 		}
 	}
+}
+
+func getNodeID(id string) string {
+	// NodeID precedence: explicit config > env var > generated
+	nodeID := id
+	if nodeID == "" {
+		nodeID = os.Getenv("GOSOCKET_NODE_ID")
+	}
+	if nodeID == "" {
+		nodeID = fmt.Sprintf("%d", time.Now().UnixNano()) // TODO: Use UUID, accept HOSTNAME, POD_NAME, etc.
+	}
+
+	return nodeID
 }

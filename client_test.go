@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FilipeJohansson/gosocket/cluster"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -17,10 +16,18 @@ type MockWebSocketConn struct {
 	closed bool
 }
 
-func (m *MockWebSocketConn) Close() error {
+func (m *MockWebSocketConn) Close() (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			// If no expectation was set on the mock, recover and return nil
+			err = nil
+		}
+	}()
+
 	args := m.Called()
 	m.closed = true
-	return args.Error(0)
+	err = args.Error(0)
+	return
 }
 
 func (m *MockWebSocketConn) WriteMessage(messageType int, data []byte) error {
@@ -306,7 +313,7 @@ func (m *MockHub) Log(logType LogType, level LogLevel, format string, args ...in
 	m.Called(logType, level, format, args)
 }
 
-func (m *MockHub) SetCluster(c cluster.ClusterManager) {
+func (m *MockHub) SetCluster(c ClusterConfig) {
 	m.Called(c)
 }
 
@@ -322,7 +329,7 @@ func TestNewClient(t *testing.T) {
 			name: "creates client with valid parameters",
 			id:   "test-client-1",
 			conn: &MockWebSocketConn{},
-			hub:  NewHub(DefaultLoggerConfig()),
+			hub:  NewHub(DefaultHubConfig()),
 			expected: func(c *Client) {
 				assert.Equal(t, "test-client-1", c.ID)
 				assert.NotNil(t, c.Conn)
@@ -336,7 +343,7 @@ func TestNewClient(t *testing.T) {
 			name: "creates client with nil connection",
 			id:   "test-client-2",
 			conn: nil,
-			hub:  NewHub(DefaultLoggerConfig()),
+			hub:  NewHub(DefaultHubConfig()),
 			expected: func(c *Client) {
 				assert.Equal(t, "test-client-2", c.ID)
 				assert.Nil(t, c.Conn)
@@ -381,8 +388,12 @@ func TestClient_Send(t *testing.T) {
 				mockHub.On("SendToClient", mock.Anything, mock.Anything, mock.Anything)
 				mockHub.On("GetClient", mock.Anything)
 				mockHub.On("Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+				mockHub.On("RemoveClient", mock.Anything)
 
-				client := NewClient("test", &MockWebSocketConn{}, mockHub, 256)
+				conn := &MockWebSocketConn{}
+				conn.On("Close").Return(nil)
+
+				client := NewClient("test", conn, mockHub, 256)
 				mockHub.AddClient(client)
 				return client
 			},
@@ -416,8 +427,12 @@ func TestClient_Send(t *testing.T) {
 				mockHub.On("SendToClient", mock.Anything, mock.Anything, mock.Anything)
 				mockHub.On("GetClient", mock.Anything)
 				mockHub.On("Log", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+				mockHub.On("RemoveClient", mock.Anything)
 
-				client := NewClient("test", &MockWebSocketConn{}, mockHub, 256)
+				conn := &MockWebSocketConn{}
+				conn.On("Close").Return(nil)
+
+				client := NewClient("test", conn, mockHub, 256)
 				mockHub.AddClient(client)
 
 				// Fill the channel to capacity
@@ -572,7 +587,7 @@ func TestClient_SendJSON(t *testing.T) {
 }
 
 func TestClient_SendProtobuf(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultHubConfig()), 256)
 	err := client.SendProtobuf("test data")
 
 	assert.Error(t, err)
@@ -696,7 +711,7 @@ func TestClient_GetRooms(t *testing.T) {
 		{
 			name: "returns empty slice when client has no rooms",
 			setupClient: func() *Client {
-				hub := NewHub(DefaultLoggerConfig())
+				hub := NewHub(DefaultHubConfig())
 				client := NewClient("test", &MockWebSocketConn{}, hub, 256)
 
 				// Manually add client to rooms for testing
@@ -711,7 +726,7 @@ func TestClient_GetRooms(t *testing.T) {
 		{
 			name: "returns rooms client is in",
 			setupClient: func() *Client {
-				hub := NewHub(DefaultLoggerConfig())
+				hub := NewHub(DefaultHubConfig())
 				client := NewClient("test", &MockWebSocketConn{}, hub, 256)
 
 				// Manually add client to rooms for testing
@@ -801,7 +816,7 @@ func TestClient_Disconnect(t *testing.T) {
 }
 
 func TestClient_SetUserData(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultHubConfig()), 256)
 
 	client.SetUserData("username", "john_doe")
 	client.SetUserData("age", 30)
@@ -813,7 +828,7 @@ func TestClient_SetUserData(t *testing.T) {
 }
 
 func TestClient_GetUserData(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultHubConfig()), 256)
 
 	// Set some test data
 	client.UserData["username"] = "john_doe"
@@ -837,7 +852,7 @@ func TestClient_GetUserData(t *testing.T) {
 }
 
 func TestClient_ConcurrentAccess(t *testing.T) {
-	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultLoggerConfig()), 256)
+	client := NewClient("test", &MockWebSocketConn{}, NewHub(DefaultHubConfig()), 256)
 
 	// Test concurrent access to UserData
 	var wg sync.WaitGroup

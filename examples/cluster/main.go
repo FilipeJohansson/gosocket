@@ -1,3 +1,5 @@
+//go:build example
+
 package main
 
 import (
@@ -17,7 +19,7 @@ func main() {
 	server, err := gosocket.NewServer(
 		gosocket.WithPath("/ws"),
 		// Configure clustering via server options
-		gosocket.WithCluster(mem),
+		gosocket.WithCluster(gosocket.ClusterConfig{Manager: mem}),
 		gosocket.OnMessage(func(c *gosocket.Client, m *gosocket.Message, ctx *gosocket.Context) error {
 			// simply broadcast incoming messages to all local+clustered nodes
 			c.Hub.BroadcastMessage(m)
