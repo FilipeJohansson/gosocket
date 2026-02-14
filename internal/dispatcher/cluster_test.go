@@ -11,6 +11,7 @@ import (
 	"github.com/FilipeJohansson/gosocket/internal/cluster"
 	"github.com/FilipeJohansson/gosocket/internal/hub"
 	"github.com/FilipeJohansson/gosocket/internal/message"
+	"github.com/stretchr/testify/require"
 )
 
 type MockClusterManager struct {
@@ -73,12 +74,16 @@ func TestClusterDispatcher_RemoteEventNormalization(t *testing.T) {
 
 	// Start the hub
 	go testHub.Run(ctx)
-	time.Sleep(100 * time.Millisecond) // Give hub time to start
+	require.Eventually(t, func() bool {
+		return testHub.Running()
+	}, 2*time.Second, 10*time.Millisecond, "hub did not start")
 
 	// Create a test client in the hub
 	testClient := hub.NewClient("test-client-1", nil, nil, 256)
 	_ = testHub.AddClient(testClient)
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		return testHub.GetClient("test-client-1") != nil
+	}, 2*time.Second, 10*time.Millisecond, "client not registered")
 
 	// TEST CASE 1: EventSendToClient - Verify normalization
 	t.Run("EventSendToClient normalization", func(t *testing.T) {
@@ -99,8 +104,6 @@ func TestClusterDispatcher_RemoteEventNormalization(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to apply remote event: %v", err)
 		}
-
-		time.Sleep(50 * time.Millisecond) // Give message time to deliver
 
 		// Verify message was delivered
 		select {
@@ -255,11 +258,11 @@ func TestClusterDispatcher_LocalOriginNotReapplied(t *testing.T) {
 	}
 
 	go testHub.Run(ctx)
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool { return testHub.Running() }, 2*time.Second, 10*time.Millisecond)
 
 	testClient := hub.NewClient("test-client-1", nil, nil, 256)
 	_ = testHub.AddClient(testClient)
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool { return testHub.GetClient("test-client-1") != nil }, 2*time.Second, 10*time.Millisecond)
 
 	// Create event from local node
 	localEvent := &cluster.Event{
@@ -276,8 +279,6 @@ func TestClusterDispatcher_LocalOriginNotReapplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to apply local event: %v", err)
 	}
-
-	time.Sleep(50 * time.Millisecond)
 
 	// Verify message was NOT delivered (loop prevention)
 	select {
@@ -311,11 +312,11 @@ func TestClusterDispatcher_TargetNodeFiltering(t *testing.T) {
 	}
 
 	go testHub.Run(ctx)
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool { return testHub.Running() }, 2*time.Second, 10*time.Millisecond)
 
 	testClient := hub.NewClient("test-client-1", nil, nil, 256)
 	_ = testHub.AddClient(testClient)
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool { return testHub.GetClient("test-client-1") != nil }, 2*time.Second, 10*time.Millisecond)
 
 	remoteEvent := &cluster.Event{
 		Type:       cluster.EventSendToClient,
@@ -363,11 +364,11 @@ func TestClusterDispatcher_EventPublishing(t *testing.T) {
 	}
 
 	go testHub.Run(ctx)
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool { return testHub.Running() }, 2*time.Second, 10*time.Millisecond)
 
 	testClient := hub.NewClient("test-client-1", nil, nil, 256)
 	_ = testHub.AddClient(testClient)
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool { return testHub.GetClient("test-client-1") != nil }, 2*time.Second, 10*time.Millisecond)
 
 	// Send message locally - should be published to cluster
 	msg := message.NewMessage(message.TextMessage, "test data")
@@ -376,12 +377,10 @@ func TestClusterDispatcher_EventPublishing(t *testing.T) {
 		t.Fatalf("Failed to send: %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
 	// Verify event was published
-	if len(mockCluster.publishedEvents) == 0 {
-		t.Fatal("No events were published to cluster")
-	}
+	require.Eventually(t, func() bool {
+		return len(mockCluster.publishedEvents) > 0
+	}, 2*time.Second, 10*time.Millisecond, "no events were published to cluster")
 
 	publishedEvent := mockCluster.publishedEvents[0]
 
@@ -422,7 +421,7 @@ func TestClusterDispatcher_ErrorHandling(t *testing.T) {
 	}
 
 	go testHub.Run(ctx)
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool { return testHub.Running() }, 2*time.Second, 10*time.Millisecond)
 
 	// Test with invalid client ID - should return error
 	msg := message.NewMessage(message.TextMessage, "test")
@@ -455,11 +454,11 @@ func TestClusterDispatcher_NormalizationConsistency(t *testing.T) {
 	}
 
 	go testHub.Run(ctx)
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool { return testHub.Running() }, 2*time.Second, 10*time.Millisecond)
 
 	testClient := hub.NewClient("test-client-1", nil, nil, 256)
 	_ = testHub.AddClient(testClient)
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool { return testHub.GetClient("test-client-1") != nil }, 2*time.Second, 10*time.Millisecond)
 
 	// Send a LOCAL message and capture it
 	localMsg := message.NewMessage(message.TextMessage, "local data")
@@ -468,8 +467,6 @@ func TestClusterDispatcher_NormalizationConsistency(t *testing.T) {
 	if localErr != nil {
 		t.Fatalf("Failed to send local: %v", localErr)
 	}
-
-	time.Sleep(100 * time.Millisecond)
 
 	var localDelivered *message.Message
 	select {
@@ -492,8 +489,6 @@ func TestClusterDispatcher_NormalizationConsistency(t *testing.T) {
 	if remoteErr != nil {
 		t.Fatalf("Failed to apply remote: %v", remoteErr)
 	}
-
-	time.Sleep(100 * time.Millisecond)
 
 	var remoteDelivered *message.Message
 	select {

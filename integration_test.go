@@ -143,9 +143,9 @@ func TestIntegration_OnConnectOnDisconnect(t *testing.T) {
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL.String(), nil)
 	require.NoError(t, err)
 
-	// Give handler time to call OnConnect
-	time.Sleep(50 * time.Millisecond)
-	require.True(t, connectCalled.Load())
+	require.Eventually(t, func() bool {
+		return connectCalled.Load()
+	}, 2*time.Second, 10*time.Millisecond, "OnConnect was not called")
 
 	ws.Close()
 
@@ -447,7 +447,17 @@ func TestIntegration_UnexpectedDisconnect(t *testing.T) {
 		}
 	}
 
-	time.Sleep(2 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for i := 1; i < clientsCount; i++ {
+			key := fmt.Sprintf("client-%d", i)
+			if len(received[key]) < (clientsCount-1)*messagesPerClient {
+				return false
+			}
+		}
+		return true
+	}, 2*time.Second, 10*time.Millisecond, "timed out waiting broadcast delivery after disconnect")
 
 	for i := 1; i < clientsCount; i++ {
 		clients[i].Close()
@@ -544,7 +554,12 @@ func TestIntegration_Reconnect(t *testing.T) {
 		require.NoError(t, ws1.WriteMessage(websocket.TextMessage, []byte(msg)))
 	}
 
-	time.Sleep(2 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received["client-1"]) >= messagesPerClient &&
+			len(received["client-2-reconnected"]) >= messagesPerClient
+	}, 2*time.Second, 10*time.Millisecond, "timed out waiting reconnect messages")
 
 	_ = ws1.Close()
 	_ = ws2New.Close()
@@ -583,7 +598,11 @@ func TestIntegration_LargeMessages(t *testing.T) {
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, largePayload))
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) == totalMessages
+	}, 2*time.Second, 10*time.Millisecond, "timed out waiting large messages")
 
 	mu.Lock()
 	receivedCount := len(received)
@@ -731,10 +750,23 @@ func TestIntegration_LargeMessagesConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	time.Sleep(200 * time.Millisecond)
-
 	expectedTotal := int32(clientCount * messagesPerClient)
-	require.Equal(t, expectedTotal, atomic.LoadInt32(&totalReceived))
+	require.Eventually(t, func() bool {
+		if atomic.LoadInt32(&totalReceived) != expectedTotal {
+			return false
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if len(clientMessages) != clientCount {
+			return false
+		}
+		for _, count := range clientMessages {
+			if count != messagesPerClient {
+				return false
+			}
+		}
+		return true
+	}, 3*time.Second, 10*time.Millisecond, "timed out waiting concurrent large messages")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -961,7 +993,9 @@ func TestIntegration_ProgressiveMessageSizes(t *testing.T) {
 		time.Sleep(delay)
 	}
 
-	time.Sleep(time.Millisecond)
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&receivedCount) == int32(len(sizes))
+	}, 3*time.Second, 10*time.Millisecond, "timed out waiting progressive message sizes")
 
 	require.Equal(t, int32(len(sizes)), atomic.LoadInt32(&receivedCount))
 
@@ -1000,7 +1034,11 @@ func TestIntegration_MessageOrder(t *testing.T) {
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(msg)))
 	}
 
-	time.Sleep(2 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) == totalMessages
+	}, 2*time.Second, 10*time.Millisecond, "timed out waiting ordered messages")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -1073,7 +1111,11 @@ func TestIntegration_BroadcastMessageOrder(t *testing.T) {
 		require.NoError(t, wsSender.WriteMessage(websocket.TextMessage, []byte(msg)))
 	}
 
-	time.Sleep(2 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received["r1"]) == totalMessages && len(received["r2"]) == totalMessages
+	}, 2*time.Second, 10*time.Millisecond, "timed out waiting ordered broadcast messages")
 
 	_ = wsSender.Close()
 	_ = wsReceiver1.Close()
@@ -1202,7 +1244,12 @@ func TestIntegration_MessageTypes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, binaryMsg, resp)
 
-	time.Sleep(2 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return bytes.Equal(textMsg, received[websocket.TextMessage]) &&
+			bytes.Equal(binaryMsg, received[websocket.BinaryMessage])
+	}, 2*time.Second, 10*time.Millisecond, "timed out waiting message type handling")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -1263,7 +1310,11 @@ func TestIntegration_JSONMessages(t *testing.T) {
 	require.Equal(t, "processed: hello", respMsg.Data)
 	require.Equal(t, 123, respMsg.ID)
 
-	time.Sleep(2 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) == 1
+	}, 2*time.Second, 10*time.Millisecond, "timed out waiting JSON message processing")
 	mu.Lock()
 	require.Len(t, received, 1)
 	require.Equal(t, testMsg, received[0])
@@ -1313,14 +1364,14 @@ func TestIntegration_ErrorHandling(t *testing.T) {
 	defer ws.Close()
 
 	require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte("error")))
-	time.Sleep(2 * time.Millisecond)
-
 	require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte("normal")))
 	_, resp_msg, err := ws.ReadMessage()
 	require.NoError(t, err)
 	require.Equal(t, []byte("normal"), resp_msg)
 
-	require.Greater(t, atomic.LoadInt32(&errorsCaught), int32(0))
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&errorsCaught) > 0
+	}, 2*time.Second, 10*time.Millisecond, "timed out waiting error handler")
 }
 
 // Test memory management under load
@@ -1527,7 +1578,11 @@ func TestIntegration_MultipleClientsWithDifferentHeaders(t *testing.T) {
 		defer ws.Close()
 	}
 
-	time.Sleep(2 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(allReceivedHeaders) == len(clients)
+	}, 2*time.Second, 10*time.Millisecond, "timed out waiting headers for all clients")
 
 	mu.Lock()
 	defer mu.Unlock()

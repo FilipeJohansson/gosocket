@@ -12,6 +12,21 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func startHub(t *testing.T, h *Hub) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go h.Run(ctx)
+	assert.Eventually(t, func() bool { return h.Running() }, 2*time.Second, 10*time.Millisecond, "hub did not start")
+	return ctx, cancel
+}
+
+func waitClient(t *testing.T, h *Hub, clientID string) {
+	assert.Eventually(t, func() bool { return h.GetClient(clientID) != nil }, 2*time.Second, 10*time.Millisecond, "client %s not available", clientID)
+}
+
+func waitNoClient(t *testing.T, h *Hub, clientID string) {
+	assert.Eventually(t, func() bool { return h.GetClient(clientID) == nil }, 2*time.Second, 10*time.Millisecond, "client %s still present", clientID)
+}
+
 func TestHub_NewHub(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -52,18 +67,14 @@ func TestHub_NewHub(t *testing.T) {
 func TestHub_HubRun(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
 	ctx, cancel := context.WithCancel(context.Background())
-
-	running := false
-	done := make(chan bool)
+	done := make(chan struct{})
 
 	go func() {
 		hub.Run(ctx)
-		done <- true
+		close(done)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
-	running = hub.Running()
-	assert.True(t, running, "Hub should be running")
+	assert.Eventually(t, func() bool { return hub.Running() }, 2*time.Second, 10*time.Millisecond, "hub should be running")
 
 	cancel()
 	<-done
@@ -73,17 +84,14 @@ func TestHub_HubRun(t *testing.T) {
 
 func TestHub_AddClient(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	client := NewClient("client-1", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 	err := hub.AddClient(client)
 	assert.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	waitClient(t, hub, "client-1")
 	retrieved := hub.GetClient("client-1")
 	assert.NotNil(t, retrieved)
 	assert.Equal(t, "client-1", retrieved.GetID())
@@ -91,15 +99,12 @@ func TestHub_AddClient(t *testing.T) {
 
 func TestHub_GetClient(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	client := NewClient("test-client", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 	_ = hub.AddClient(client)
-	time.Sleep(50 * time.Millisecond)
+	waitClient(t, hub, "test-client")
 
 	tests := []struct {
 		name     string
@@ -120,18 +125,15 @@ func TestHub_GetClient(t *testing.T) {
 
 func TestHub_GetClients(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	client1 := NewClient("client-1", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 	client2 := NewClient("client-2", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 
 	_ = hub.AddClient(client1)
 	_ = hub.AddClient(client2)
-	time.Sleep(100 * time.Millisecond)
+	assert.Eventually(t, func() bool { return len(hub.GetClients()) == 2 }, 2*time.Second, 10*time.Millisecond)
 
 	clients := hub.GetClients()
 	assert.Equal(t, 2, len(clients))
@@ -141,36 +143,28 @@ func TestHub_GetClients(t *testing.T) {
 
 func TestHub_RemoveClient(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	client := NewClient("client-1", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 	_ = hub.AddClient(client)
-	time.Sleep(50 * time.Millisecond)
+	waitClient(t, hub, "client-1")
 
 	assert.NotNil(t, hub.GetClient("client-1"))
 
 	err := hub.RemoveClient("client-1")
 	assert.NoError(t, err)
-	time.Sleep(50 * time.Millisecond)
-
-	assert.Nil(t, hub.GetClient("client-1"))
+	waitNoClient(t, hub, "client-1")
 }
 
 func TestHub_SendToClient(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	client := NewClient("client-1", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 	_ = hub.AddClient(client)
-	time.Sleep(50 * time.Millisecond)
+	waitClient(t, hub, "client-1")
 
 	msg := &message.Message{
 		Type:    message.TextMessage,
@@ -180,7 +174,7 @@ func TestHub_SendToClient(t *testing.T) {
 	err := hub.SendToClient("client-1", msg)
 	assert.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	assert.Eventually(t, func() bool { return len(client.SendChan) > 0 }, 2*time.Second, 10*time.Millisecond)
 	select {
 	case received := <-client.SendChan:
 		assert.Equal(t, msg, received)
@@ -191,11 +185,8 @@ func TestHub_SendToClient(t *testing.T) {
 
 func TestHub_SendToClientNotFound(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	msg := &message.Message{
 		Type:    message.TextMessage,
@@ -209,18 +200,15 @@ func TestHub_SendToClientNotFound(t *testing.T) {
 
 func TestHub_Broadcast(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	client1 := NewClient("client-1", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 	client2 := NewClient("client-2", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 
 	_ = hub.AddClient(client1)
 	_ = hub.AddClient(client2)
-	time.Sleep(100 * time.Millisecond)
+	assert.Eventually(t, func() bool { return len(hub.GetClients()) == 2 }, 2*time.Second, 10*time.Millisecond)
 
 	msg := &message.Message{
 		Type:    message.TextMessage,
@@ -230,7 +218,7 @@ func TestHub_Broadcast(t *testing.T) {
 	err := hub.Broadcast(msg)
 	assert.NoError(t, err)
 
-	time.Sleep(100 * time.Millisecond)
+	assert.Eventually(t, func() bool { return len(client1.SendChan) > 0 && len(client2.SendChan) > 0 }, 2*time.Second, 10*time.Millisecond)
 
 	select {
 	case <-client1.SendChan:
@@ -247,11 +235,8 @@ func TestHub_Broadcast(t *testing.T) {
 
 func TestHub_CreateRoom(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	room, err := hub.CreateRoom("owner", "test-room")
 	assert.NoError(t, err)
@@ -261,11 +246,8 @@ func TestHub_CreateRoom(t *testing.T) {
 
 func TestHub_CreateRoomEmptyName(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	_, err := hub.CreateRoom("owner", "")
 	assert.Error(t, err)
@@ -274,66 +256,57 @@ func TestHub_CreateRoomEmptyName(t *testing.T) {
 
 func TestHub_JoinRoom(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	client := NewClient("client-1", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 	_ = hub.AddClient(client)
-	time.Sleep(50 * time.Millisecond)
+	waitClient(t, hub, "client-1")
 
 	room, _ := hub.CreateRoom("owner", "test-room")
 	err := hub.JoinRoom("client-1", "test-room")
 	assert.NoError(t, err)
 
-	clients := hub.GetClientsInRoom(room.ID())
-	assert.Equal(t, 1, len(clients))
-	assert.NotNil(t, clients["client-1"])
+	assert.Eventually(t, func() bool {
+		clients := hub.GetClientsInRoom(room.ID())
+		return len(clients) == 1 && clients["client-1"] != nil
+	}, 2*time.Second, 10*time.Millisecond)
 }
 
 func TestHub_LeaveRoom(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	client := NewClient("client-1", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 	_ = hub.AddClient(client)
-	time.Sleep(50 * time.Millisecond)
+	waitClient(t, hub, "client-1")
 
 	room, _ := hub.CreateRoom("owner", "test-room")
 	_ = hub.JoinRoom("client-1", "test-room")
-	time.Sleep(50 * time.Millisecond)
+	assert.Eventually(t, func() bool { return len(hub.GetClientsInRoom(room.ID())) == 1 }, 2*time.Second, 10*time.Millisecond)
 
 	err := hub.LeaveRoom("client-1", "test-room")
 	assert.NoError(t, err)
 
-	clients := hub.GetClientsInRoom(room.ID())
-	assert.Equal(t, 0, len(clients))
+	assert.Eventually(t, func() bool { return len(hub.GetClientsInRoom(room.ID())) == 0 }, 2*time.Second, 10*time.Millisecond)
 }
 
 func TestHub_BroadcastToRoom(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	client1 := NewClient("client-1", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 	client2 := NewClient("client-2", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 
 	_ = hub.AddClient(client1)
 	_ = hub.AddClient(client2)
-	time.Sleep(100 * time.Millisecond)
+	assert.Eventually(t, func() bool { return len(hub.GetClients()) == 2 }, 2*time.Second, 10*time.Millisecond)
 
-	_, _ = hub.CreateRoom("owner", "test-room")
+	room, _ := hub.CreateRoom("owner", "test-room")
 	_ = hub.JoinRoom("client-1", "test-room")
-	time.Sleep(50 * time.Millisecond)
+	assert.Eventually(t, func() bool { return len(hub.GetClientsInRoom(room.ID())) == 1 }, 2*time.Second, 10*time.Millisecond)
 
 	msg := &message.Message{
 		Type:    message.TextMessage,
@@ -343,7 +316,7 @@ func TestHub_BroadcastToRoom(t *testing.T) {
 	err := hub.BroadcastToRoom("test-room", msg)
 	assert.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	assert.Eventually(t, func() bool { return len(client1.SendChan) > 0 }, 2*time.Second, 10*time.Millisecond)
 
 	select {
 	case <-client1.SendChan:
@@ -360,11 +333,8 @@ func TestHub_BroadcastToRoom(t *testing.T) {
 
 func TestHub_DeleteRoom(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	room, _ := hub.CreateRoom("owner", "test-room")
 	err := hub.DeleteRoom(room.ID())
@@ -376,11 +346,8 @@ func TestHub_DeleteRoom(t *testing.T) {
 
 func TestHub_GetRoom(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	created, _ := hub.CreateRoom("owner", "test-room")
 	retrieved, err := hub.GetRoom(created.ID())
@@ -391,11 +358,8 @@ func TestHub_GetRoom(t *testing.T) {
 
 func TestHub_DeleteEmptyRooms(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	_, _ = hub.CreateRoom("owner", "room1")
 	_, _ = hub.CreateRoom("owner", "room2")
@@ -410,26 +374,20 @@ func TestHub_DeleteEmptyRooms(t *testing.T) {
 
 func TestHub_GetClientsInRoom(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	client1 := NewClient("client-1", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 	client2 := NewClient("client-2", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 
 	_ = hub.AddClient(client1)
 	_ = hub.AddClient(client2)
-	time.Sleep(100 * time.Millisecond)
+	assert.Eventually(t, func() bool { return len(hub.GetClients()) == 2 }, 2*time.Second, 10*time.Millisecond)
 
 	room, _ := hub.CreateRoom("owner", "test-room")
 	_ = hub.JoinRoom("client-1", "test-room")
 	_ = hub.JoinRoom("client-2", "test-room")
-	time.Sleep(50 * time.Millisecond)
-
-	clients := hub.GetClientsInRoom(room.ID())
-	assert.Equal(t, 2, len(clients))
+	assert.Eventually(t, func() bool { return len(hub.GetClientsInRoom(room.ID())) == 2 }, 2*time.Second, 10*time.Millisecond)
 }
 
 func TestHub_BackpressureDropNewest(t *testing.T) {
@@ -438,15 +396,12 @@ func TestHub_BackpressureDropNewest(t *testing.T) {
 		BackpressurePolicy: DropNewest,
 	}
 	hub := NewHub(cfg)
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	client := NewClient("client-1", &MockWebSocketConn{}, &ConnectionInfo{}, 2)
 	_ = hub.AddClient(client)
-	time.Sleep(50 * time.Millisecond)
+	waitClient(t, hub, "client-1")
 
 	// Fill channel
 	_ = hub.SendToClient("client-1", &message.Message{Type: message.TextMessage, RawData: []byte("msg1")})
@@ -463,15 +418,12 @@ func TestHub_BackpressureDropOldest(t *testing.T) {
 		BackpressurePolicy: DropOldest,
 	}
 	hub := NewHub(cfg)
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	client := NewClient("client-1", &MockWebSocketConn{}, &ConnectionInfo{}, 2)
 	_ = hub.AddClient(client)
-	time.Sleep(50 * time.Millisecond)
+	waitClient(t, hub, "client-1")
 
 	// Fill channel
 	_ = hub.SendToClient("client-1", &message.Message{Type: message.TextMessage, RawData: []byte("msg1")})
@@ -487,11 +439,8 @@ func TestHub_BackpressureDropOldest(t *testing.T) {
 
 func TestHub_ConcurrentClientOperations(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	var wg sync.WaitGroup
 	numClients := 50
@@ -507,19 +456,13 @@ func TestHub_ConcurrentClientOperations(t *testing.T) {
 	}
 
 	wg.Wait()
-	time.Sleep(100 * time.Millisecond)
-
-	clients := hub.GetClients()
-	assert.Equal(t, numClients, len(clients))
+	assert.Eventually(t, func() bool { return len(hub.GetClients()) == numClients }, 2*time.Second, 10*time.Millisecond)
 }
 
 func TestHub_ConcurrentRoomOperations(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	var wg sync.WaitGroup
 	numRooms := 50
@@ -534,23 +477,17 @@ func TestHub_ConcurrentRoomOperations(t *testing.T) {
 	}
 
 	wg.Wait()
-	time.Sleep(100 * time.Millisecond)
-
-	rooms := hub.GetRooms()
-	assert.Equal(t, numRooms, len(rooms))
+	assert.Eventually(t, func() bool { return len(hub.GetRooms()) == numRooms }, 2*time.Second, 10*time.Millisecond)
 }
 
 func TestHub_GetStats(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	client := NewClient("client-1", &MockWebSocketConn{}, &ConnectionInfo{}, 256)
 	_ = hub.AddClient(client)
-	time.Sleep(50 * time.Millisecond)
+	waitClient(t, hub, "client-1")
 
 	_, _ = hub.CreateRoom("owner", "test-room")
 	_ = hub.JoinRoom("client-1", "test-room")
@@ -564,36 +501,30 @@ func TestHub_HubRunning(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
 	assert.False(t, hub.Running())
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
+	_, cancel := startHub(t, hub)
 
 	assert.True(t, hub.Running())
 
 	cancel()
-	time.Sleep(100 * time.Millisecond)
+	assert.Eventually(t, func() bool { return !hub.Running() }, 2*time.Second, 10*time.Millisecond)
 
 	assert.False(t, hub.Running())
 }
 
 func TestHub_DisconnectClient(t *testing.T) {
 	hub := NewHub(DefaultHubConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := startHub(t, hub)
 	defer cancel()
-
-	go hub.Run(ctx)
-	time.Sleep(50 * time.Millisecond)
 
 	mockConn := &MockWebSocketConn{}
 	mockConn.On("Close").Return(nil)
 
 	client := NewClient("client-1", mockConn, &ConnectionInfo{}, 256)
 	_ = hub.AddClient(client)
-	time.Sleep(50 * time.Millisecond)
+	waitClient(t, hub, "client-1")
 
 	err := hub.DisconnectClient("client-1")
 	assert.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
-	assert.Nil(t, hub.GetClient("client-1"))
+	waitNoClient(t, hub, "client-1")
 }
