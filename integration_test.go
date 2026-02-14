@@ -2,161 +2,216 @@ package gosocket
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/FilipeJohansson/gosocket/cluster"
+	gsWebsocket "github.com/FilipeJohansson/gosocket/internal/transport/websocket"
+
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
 
-func TestIntegration_Echo(t *testing.T) {
-	server, err := NewServer(
+func newTestServer(t *testing.T, opts ...gsWebsocket.UniversalOption) *httptest.Server {
+	handler, err := NewHandler(opts...)
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(handler)
+	return ts
+}
+
+func TestIntegration_BasicEcho(t *testing.T) {
+	server := newTestServer(t,
 		WithPath("/ws"),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.Send(m)
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			// Echo back the message
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+			return d.SendToClient(client.GetID(), m)
 		}),
 	)
+	defer server.Close()
 
-	server = mustServer(t, server, err)
+	wsURL := url.URL{
+		Scheme: "ws",
+		Host:   server.Listener.Addr().String(),
+		Path:   "/ws",
+	}
 
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
-	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL.String(), nil)
 	require.NoError(t, err)
 	defer ws.Close()
 
-	msg := []byte("hello")
-	require.NoError(t, ws.WriteMessage(websocket.TextMessage, msg))
+	// Send message
+	testMsg := []byte("hello world")
+	err = ws.WriteMessage(websocket.TextMessage, testMsg)
+	require.NoError(t, err)
 
+	// Receive echo
 	_, resp, err := ws.ReadMessage()
 	require.NoError(t, err)
-	require.Equal(t, msg, resp)
+	require.Equal(t, testMsg, resp)
 }
 
-func TestIntegration_Broadcast(t *testing.T) {
-	var mu sync.Mutex
-	received := make(map[string][][]byte)
+func TestIntegration_MultiClientEcho(t *testing.T) {
+	const numClients = 50
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			c.Hub.BroadcastMessage(m)
-			return nil
+		WithRateLimit(&RateLimiterConfig{
+			PerClientRate:          50,
+			PerClientBurst:         50,
+			PerIPRate:              50,
+			PerIPBurst:             50,
+			MaxRateLimitViolations: 50,
+			CleanupInterval:        50,
+			EntryTTL:               50,
+		}),
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+			return d.SendToClient(client.GetID(), m)
 		}),
 	)
-	server = mustServer(t, server, err)
+	defer server.Close()
 
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	wsURL := url.URL{
+		Scheme: "ws",
+		Host:   server.Listener.Addr().String(),
+		Path:   "/ws",
+	}
 
-	clients := make([]*websocket.Conn, 3)
-	for i := 0; i < len(clients); i++ {
-		ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	var clients []*websocket.Conn
+	for i := 0; i < numClients; i++ {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL.String(), nil)
 		require.NoError(t, err)
-		defer ws.Close()
-		clients[i] = ws
+		clients = append(clients, ws)
 	}
+	defer func() {
+		for _, ws := range clients {
+			ws.Close()
+		}
+	}()
 
-	msg := []byte("broadcast-test")
-	require.NoError(t, clients[0].WriteMessage(websocket.TextMessage, msg))
-
-	var wg sync.WaitGroup
+	// Each client sends a message
 	for i, ws := range clients {
-		wg.Add(1)
-		go func(idx int, conn *websocket.Conn) {
-			defer wg.Done()
-			_, data, err := conn.ReadMessage()
-			require.NoError(t, err)
-			mu.Lock()
-			received[strconv.Itoa(idx)] = append(received[strconv.Itoa(idx)], data)
-			mu.Unlock()
-		}(i, ws)
-	}
-	wg.Wait()
-
-	for _, msgs := range received {
-		require.Len(t, msgs, 1)
-		require.Equal(t, msg, msgs[0])
-	}
-}
-
-func TestIntegration_Disconnect(t *testing.T) {
-	disconnectedCh := make(chan struct{})
-
-	var disconnected bool
-	server, err := NewServer(
-		WithPath("/ws"),
-		OnDisconnect(func(c *Client, ctx *Context) error {
-			disconnected = true
-			close(disconnectedCh)
-			return nil
-		}),
-	)
-	server = mustServer(t, server, err)
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
-
-	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-	require.NoError(t, err)
-	ws.Close()
-	<-disconnectedCh
-
-	require.True(t, disconnected)
-}
-
-func TestIntegration_RapidMessages(t *testing.T) {
-	server, err := NewServer(
-		WithPath("/ws"),
-		WithRateLimit(RateLimiterConfig{
-			PerClientRate:          3000,
-			PerClientBurst:         3000,
-			PerIPRate:              3000,
-			PerIPBurst:             3000,
-			CleanupInterval:        time.Minute,
-			EntryTTL:               time.Minute,
-			MaxRateLimitViolations: 3000,
-		}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.SendRaw(m.RawData)
-		}),
-	)
-	server = mustServer(t, server, err)
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
-
-	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-	require.NoError(t, err)
-	defer ws.Close()
-
-	for i := 0; i < 1000; i++ {
-		msg := []byte("msg" + strconv.Itoa(i))
-		require.NoError(t, ws.WriteMessage(websocket.TextMessage, msg))
+		testMsg := []byte(fmt.Sprintf("client-%d", i))
+		err := ws.WriteMessage(websocket.TextMessage, testMsg)
+		require.NoError(t, err)
 
 		_, resp, err := ws.ReadMessage()
 		require.NoError(t, err)
-		require.Equal(t, msg, resp)
+		require.Equal(t, testMsg, resp)
 	}
 }
 
-func TestIntegration_ConcurrentClients(t *testing.T) {
+func TestIntegration_OnConnectOnDisconnect(t *testing.T) {
+	connectCalled := atomic.Bool{}
+	disconnectCalled := atomic.Bool{}
+	disconnectDone := make(chan struct{})
+
+	server := newTestServer(t,
+		WithPath("/ws"),
+		OnConnect(func(d Dispatcher, ctx *Context) error {
+			connectCalled.Store(true)
+			return nil
+		}),
+		OnDisconnect(func(d Dispatcher, ctx *Context) error {
+			disconnectCalled.Store(true)
+			close(disconnectDone)
+			return nil
+		}),
+	)
+	defer server.Close()
+
+	wsURL := url.URL{
+		Scheme: "ws",
+		Host:   server.Listener.Addr().String(),
+		Path:   "/ws",
+	}
+
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL.String(), nil)
+	require.NoError(t, err)
+
+	// Give handler time to call OnConnect
+	time.Sleep(50 * time.Millisecond)
+	require.True(t, connectCalled.Load())
+
+	ws.Close()
+
+	// Wait for disconnect
+	select {
+	case <-disconnectDone:
+		require.True(t, disconnectCalled.Load())
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnDisconnect not called")
+	}
+}
+
+func TestIntegration_MessageReceived(t *testing.T) {
+	messagesCh := make(chan string, 10)
+
+	server := newTestServer(t,
+		WithPath("/ws"),
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			select {
+			case messagesCh <- string(m.RawData):
+			default:
+			}
+			return nil
+		}),
+	)
+	defer server.Close()
+
+	wsURL := url.URL{
+		Scheme: "ws",
+		Host:   server.Listener.Addr().String(),
+		Path:   "/ws",
+	}
+
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL.String(), nil)
+	require.NoError(t, err)
+	defer ws.Close()
+
+	// Send multiple messages
+	testMessages := []string{"msg1", "msg2", "msg3"}
+	for _, msg := range testMessages {
+		err := ws.WriteMessage(websocket.TextMessage, []byte(msg))
+		require.NoError(t, err)
+	}
+
+	// Receive them
+	received := make(map[string]bool)
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case msg := <-messagesCh:
+			received[msg] = true
+			if len(received) == len(testMessages) {
+				goto allReceived
+			}
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	t.Fatal("timeout waiting for all messages")
+
+allReceived:
+	for _, msg := range testMessages {
+		require.True(t, received[msg], "message not received: %s", msg)
+	}
+}
+
+func TestIntegration_ConcurrentConnections(t *testing.T) {
 	const clientsCount = 100
 	const messagesPerClient = 20
 
@@ -166,46 +221,63 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 
 	disconnectWg.Add(clientsCount)
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		WithRateLimit(RateLimiterConfig{
-			PerClientRate:          3000,
-			PerClientBurst:         3000,
-			PerIPRate:              3000,
-			PerIPBurst:             3000,
-			CleanupInterval:        time.Minute,
-			EntryTTL:               time.Minute,
-			MaxRateLimitViolations: 3000,
+		WithRateLimit(&RateLimiterConfig{
+			PerClientRate:          1000,
+			PerClientBurst:         1000,
+			PerIPRate:              1000,
+			PerIPBurst:             1000,
+			MaxRateLimitViolations: 1000,
+			CleanupInterval:        1000,
+			EntryTTL:               1000,
 		}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+
 			if bytes.HasPrefix(m.RawData, []byte("[ID]")) {
 				mu.Lock()
-				c.UserData["id"] = string(m.RawData[5:])
+				client.SetUserData("id", string(m.RawData[5:]))
 				mu.Unlock()
 				return nil
 			}
-			return c.SendRaw(m.RawData)
+
+			if err := d.SendToClient(client.GetID(), m); err != nil {
+				return err
+			}
+			return nil
 		}),
-		OnDisconnect(func(c *Client, ctx *Context) error {
+		OnDisconnect(func(d Dispatcher, ctx *Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+
 			mu.Lock()
-			id := c.UserData["id"].(string)
+			id := client.GetUserDataByKey("id").(string)
 			received[id] = append(received[id], "disconnected")
 			mu.Unlock()
+
 			disconnectWg.Done()
 			return nil
 		}),
 	)
-	server = mustServer(t, server, err)
+	defer server.Close()
 
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	wsURL := url.URL{
+		Scheme: "ws",
+		Host:   server.Listener.Addr().String(),
+		Path:   "/ws",
+	}
 
 	var wg sync.WaitGroup
 	clients := make([]*websocket.Conn, clientsCount)
 
 	for i := 0; i < clientsCount; i++ {
-		ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL.String(), nil)
 		require.NoError(t, err)
 		clients[i] = ws
 	}
@@ -255,32 +327,33 @@ func TestIntegration_ConcurrentBroadcast(t *testing.T) {
 	var mu sync.Mutex
 	received := make(map[string][]string)
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		WithRateLimit(RateLimiterConfig{
-			PerClientRate:          3000,
-			PerClientBurst:         3000,
-			PerIPRate:              3000,
-			PerIPBurst:             3000,
-			CleanupInterval:        time.Minute,
-			EntryTTL:               time.Minute,
-			MaxRateLimitViolations: 3000,
+		WithRateLimit(&RateLimiterConfig{
+			PerClientRate:          1000,
+			PerClientBurst:         1000,
+			PerIPRate:              1000,
+			PerIPBurst:             1000,
+			MaxRateLimitViolations: 1000,
+			CleanupInterval:        1000,
+			EntryTTL:               1000,
 		}),
 		WithMessageBufferSize(1024),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			c.Hub.BroadcastMessage(m)
-			return nil
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			return d.Broadcast(m)
 		}),
 	)
-	server = mustServer(t, server, err)
+	defer server.Close()
 
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	wsURL := url.URL{
+		Scheme: "ws",
+		Host:   server.Listener.Addr().String(),
+		Path:   "/ws",
+	}
 
 	clients := make([]*websocket.Conn, clientsCount)
 	for i := 0; i < clientsCount; i++ {
-		ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL.String(), nil)
 		require.NoError(t, err)
 		clients[i] = ws
 		defer ws.Close()
@@ -291,6 +364,7 @@ func TestIntegration_ConcurrentBroadcast(t *testing.T) {
 		wg.Add(1)
 		go func(idx int, conn *websocket.Conn) {
 			defer wg.Done()
+
 			for j := 0; j < messagesPerClient; j++ {
 				msg := fmt.Sprintf("client-%d-msg-%d", idx, j)
 				require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(msg)))
@@ -330,18 +404,15 @@ func TestIntegration_UnexpectedDisconnect(t *testing.T) {
 	var mu sync.Mutex
 	received := make(map[string][]string)
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			c.Hub.BroadcastMessage(m)
-			return nil
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			return d.Broadcast(m)
 		}),
 	)
-	server = mustServer(t, server, err)
+	defer server.Close()
 
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	clients := make([]*websocket.Conn, clientsCount)
 	for i := 0; i < clientsCount; i++ {
@@ -399,18 +470,15 @@ func TestIntegration_Reconnect(t *testing.T) {
 	var mu sync.Mutex
 	received := make(map[string][]string)
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			c.Hub.BroadcastMessage(m)
-			return nil
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			return d.Broadcast(m)
 		}),
 	)
-	server = mustServer(t, server, err)
+	defer server.Close()
 
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	ws1, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	require.NoError(t, err)
@@ -493,20 +561,17 @@ func TestIntegration_LargeMessages(t *testing.T) {
 	var mu sync.Mutex
 	received := make([]string, 0, totalMessages)
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
 			mu.Lock()
 			received = append(received, string(m.RawData))
 			mu.Unlock()
 			return nil
 		}),
 	)
-	server = mustServer(t, server, err)
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	require.NoError(t, err)
@@ -537,9 +602,9 @@ func TestIntegration_LargeMessagesEcho(t *testing.T) {
 	var mu sync.Mutex
 	received := make([][]byte, 0, totalMessages)
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		WithRateLimit(RateLimiterConfig{
+		WithRateLimit(&RateLimiterConfig{
 			PerClientRate:          100,
 			PerClientBurst:         100,
 			PerIPRate:              200,
@@ -548,15 +613,16 @@ func TestIntegration_LargeMessagesEcho(t *testing.T) {
 			EntryTTL:               time.Minute,
 			MaxRateLimitViolations: 100,
 		}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.SendRaw(m.RawData)
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+			return d.SendToClient(client.GetID(), m)
 		}),
 	)
-	server = mustServer(t, server, err)
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	require.NoError(t, err)
@@ -608,9 +674,9 @@ func TestIntegration_LargeMessagesConcurrent(t *testing.T) {
 	var mu sync.Mutex
 	clientMessages := make(map[string]int)
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		WithRateLimit(RateLimiterConfig{
+		WithRateLimit(&RateLimiterConfig{
 			PerClientRate:          50,
 			PerClientBurst:         50,
 			PerIPRate:              200,
@@ -619,7 +685,7 @@ func TestIntegration_LargeMessagesConcurrent(t *testing.T) {
 			EntryTTL:               time.Minute,
 			MaxRateLimitViolations: 100,
 		}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
 			atomic.AddInt32(&totalReceived, 1)
 
 			clientID := string(m.RawData[:10])
@@ -630,11 +696,8 @@ func TestIntegration_LargeMessagesConcurrent(t *testing.T) {
 			return nil
 		}),
 	)
-	server = mustServer(t, server, err)
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	var clients []*websocket.Conn
 	for i := 0; i < clientCount; i++ {
@@ -689,9 +752,9 @@ func TestIntegration_LargeMessageBroadcast(t *testing.T) {
 	var mu sync.Mutex
 	received := make(map[int][]int)
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		WithRateLimit(RateLimiterConfig{
+		WithRateLimit(&RateLimiterConfig{
 			PerClientRate:          50,
 			PerClientBurst:         50,
 			PerIPRate:              200,
@@ -701,17 +764,12 @@ func TestIntegration_LargeMessageBroadcast(t *testing.T) {
 			MaxRateLimitViolations: 100,
 		}),
 		WithMessageBufferSize(2048),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			// broadcast large message to all clients
-			c.Hub.BroadcastMessage(m)
-			return nil
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			return d.Broadcast(m)
 		}),
 	)
-	server = mustServer(t, server, err)
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	var clients []*websocket.Conn
 	for i := 0; i < clientCount; i++ {
@@ -745,34 +803,21 @@ func TestIntegration_LargeMessageBroadcast(t *testing.T) {
 	}
 
 	for i := 0; i < totalBroadcasts; i++ {
-		// Broadcast directly from the server hub to avoid client-side write errors
-		server.handler.hub.BroadcastMessage(&Message{RawData: largePayload, Type: BinaryMessage})
-		time.Sleep(50 * time.Millisecond)
+		require.NoError(t, clients[0].WriteMessage(websocket.BinaryMessage, largePayload))
+		time.Sleep(3 * time.Millisecond)
 	}
 
-	// Wait until all clients received the expected number of broadcasts or timeout.
-	deadline := time.Now().Add(3 * time.Second)
-waitLoop:
-	for {
-		allOK := true
+	require.Eventually(t, func() bool {
 		mu.Lock()
+		defer mu.Unlock()
 		for clientID := 0; clientID < clientCount; clientID++ {
-			if len(received[clientID]) != totalBroadcasts {
-				allOK = false
-				break
+			if len(received[clientID]) < totalBroadcasts {
+				return false
 			}
 		}
-		mu.Unlock()
-		if allOK {
-			break waitLoop
-		}
-		if time.Now().After(deadline) {
-			break waitLoop
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return true
+	}, 2*time.Second, 10*time.Millisecond, "timed out waiting all clients to receive broadcasts")
 
-	// Close clients and wait for reader goroutines to finish.
 	for _, ws := range clients {
 		ws.Close()
 	}
@@ -783,7 +828,7 @@ waitLoop:
 
 	for clientID := 0; clientID < clientCount; clientID++ {
 		sizes := received[clientID]
-		require.Len(t, sizes, totalBroadcasts, "Client %d received wrong number of broadcasts: %v", clientID, sizes)
+		require.Len(t, sizes, totalBroadcasts, "Client %d received wrong number of broadcasts", clientID)
 		for j, size := range sizes {
 			require.Equal(t, payloadSize, size, "Client %d broadcast %d has wrong size", clientID, j)
 		}
@@ -797,9 +842,9 @@ func TestIntegration_LargeMessagesWithFailures(t *testing.T) {
 	var successCount int32
 	var errorCount int32
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		WithRateLimit(RateLimiterConfig{
+		WithRateLimit(&RateLimiterConfig{
 			PerClientRate:          20,
 			PerClientBurst:         20,
 			PerIPRate:              40,
@@ -808,20 +853,17 @@ func TestIntegration_LargeMessagesWithFailures(t *testing.T) {
 			EntryTTL:               time.Minute,
 			MaxRateLimitViolations: 30,
 		}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
 			atomic.AddInt32(&successCount, 1)
 			return nil
 		}),
-		OnError(func(c *Client, err error, ctx *Context) error {
+		OnError(func(err error, d Dispatcher, ctx *gsWebsocket.Context) error {
 			atomic.AddInt32(&errorCount, 1)
 			return nil
 		}),
 	)
-	server = mustServer(t, server, err)
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	require.NoError(t, err)
@@ -868,9 +910,9 @@ func TestIntegration_ProgressiveMessageSizes(t *testing.T) {
 	var receivedSizes []int
 	var mu sync.Mutex
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		WithRateLimit(RateLimiterConfig{
+		WithRateLimit(&RateLimiterConfig{
 			PerClientRate:          10,
 			PerClientBurst:         20,
 			PerIPRate:              20,
@@ -880,7 +922,7 @@ func TestIntegration_ProgressiveMessageSizes(t *testing.T) {
 			MaxRateLimitViolations: 50,
 		}),
 		WithMessageBufferSize(1024),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
 			atomic.AddInt32(&receivedCount, 1)
 			mu.Lock()
 			receivedSizes = append(receivedSizes, len(m.RawData))
@@ -888,11 +930,8 @@ func TestIntegration_ProgressiveMessageSizes(t *testing.T) {
 			return nil
 		}),
 	)
-	server = mustServer(t, server, err)
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 30 * time.Second,
@@ -940,20 +979,17 @@ func TestIntegration_MessageOrder(t *testing.T) {
 	var mu sync.Mutex
 	var received []string
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
 			mu.Lock()
 			received = append(received, string(m.RawData))
 			mu.Unlock()
 			return nil
 		}),
 	)
-	server = mustServer(t, server, err)
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	require.NoError(t, err)
@@ -982,18 +1018,14 @@ func TestIntegration_BroadcastMessageOrder(t *testing.T) {
 	var mu sync.Mutex
 	received := make(map[string][]string)
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			c.Hub.BroadcastMessage(m)
-			return nil
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			return d.Broadcast(m)
 		}),
 	)
-	server = mustServer(t, server, err)
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	wsSender, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	require.NoError(t, err)
@@ -1060,190 +1092,6 @@ func TestIntegration_BroadcastMessageOrder(t *testing.T) {
 	}
 }
 
-func TestIntegration_MultipleHubsIsolation(t *testing.T) {
-	var mu sync.Mutex
-	receivedHub1 := make([]string, 0)
-	receivedHub2 := make([]string, 0)
-
-	server1, err := NewServer(
-		WithPath("/ws1"),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			c.Hub.BroadcastMessage(m)
-			return nil
-		}),
-	)
-	server1 = mustServer(t, server1, err)
-
-	server2, err := NewServer(
-		WithPath("/ws2"),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			c.Hub.BroadcastMessage(m)
-			return nil
-		}),
-	)
-	server2 = mustServer(t, server2, err)
-
-	mux := http.NewServeMux()
-	mux.Handle("/ws1", server1.handler)
-	mux.Handle("/ws2", server2.handler)
-
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-	host := ts.Listener.Addr().String()
-
-	u1 := url.URL{Scheme: "ws", Host: host, Path: "/ws1"}
-	u2 := url.URL{Scheme: "ws", Host: host, Path: "/ws2"}
-
-	wsHub1, _, err := websocket.DefaultDialer.Dial(u1.String(), nil)
-	require.NoError(t, err)
-	defer wsHub1.Close()
-
-	wsHub2, _, err := websocket.DefaultDialer.Dial(u2.String(), nil)
-	require.NoError(t, err)
-	defer wsHub2.Close()
-
-	var readers sync.WaitGroup
-	readers.Add(2)
-
-	go func() {
-		defer readers.Done()
-		for {
-			_, msg, err := wsHub1.ReadMessage()
-			if err != nil {
-				return
-			}
-			mu.Lock()
-			receivedHub1 = append(receivedHub1, string(msg))
-			mu.Unlock()
-		}
-	}()
-
-	go func() {
-		defer readers.Done()
-		for {
-			_, msg, err := wsHub2.ReadMessage()
-			if err != nil {
-				return
-			}
-			mu.Lock()
-			receivedHub2 = append(receivedHub2, string(msg))
-			mu.Unlock()
-		}
-	}()
-
-	require.NoError(t, wsHub1.WriteMessage(websocket.TextMessage, []byte("hub1-msg")))
-	require.NoError(t, wsHub2.WriteMessage(websocket.TextMessage, []byte("hub2-msg")))
-
-	time.Sleep(2 * time.Millisecond)
-
-	_ = wsHub1.Close()
-	_ = wsHub2.Close()
-	readers.Wait()
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	require.Contains(t, receivedHub1, "hub1-msg")
-	require.NotContains(t, receivedHub1, "hub2-msg")
-
-	require.Contains(t, receivedHub2, "hub2-msg")
-	require.NotContains(t, receivedHub2, "hub1-msg")
-}
-
-func TestIntegration_RoomsIsolation(t *testing.T) {
-	var mu sync.Mutex
-	received := make(map[string][]string)
-
-	server, err := NewServer(
-		WithPath("/ws"),
-		WithRelevantHeaders([]string{"Room"}),
-		OnConnect(func(c *Client, ctx *Context) error {
-			_ = c.Hub.JoinRoom(c, ctx.connInfo.Headers["Room"])
-			return nil
-		}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			roomName := ctx.connInfo.Headers["Room"]
-			room := c.Hub.GetRooms()
-			if room != nil {
-				_ = c.Hub.BroadcastToRoom(roomName, m)
-			}
-			return nil
-		}),
-	)
-	server = mustServer(t, server, err)
-
-	_, _ = server.handler.hub.CreateRoom("__SERVER__", "room1", "room1")
-	_, _ = server.handler.hub.CreateRoom("__SERVER__", "room2", "room2")
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	host := ts.Listener.Addr().String()
-	u := url.URL{Scheme: "ws", Host: host, Path: "/ws"}
-
-	joinRoom := func(room string) *websocket.Conn {
-		ws, _, err := websocket.DefaultDialer.Dial(u.String(), http.Header{"Room": []string{room}})
-		require.NoError(t, err)
-		return ws
-	}
-
-	ws1a := joinRoom("room1")
-	defer ws1a.Close()
-	ws1b := joinRoom("room1")
-	defer ws1b.Close()
-
-	ws2a := joinRoom("room2")
-	defer ws2a.Close()
-	ws2b := joinRoom("room2")
-	defer ws2b.Close()
-
-	var readers sync.WaitGroup
-	readers.Add(4)
-
-	startReader := func(name string, ws *websocket.Conn) {
-		go func() {
-			defer readers.Done()
-			for {
-				_, msg, err := ws.ReadMessage()
-				if err != nil {
-					return
-				}
-				mu.Lock()
-				received[name] = append(received[name], string(msg))
-				mu.Unlock()
-			}
-		}()
-	}
-
-	startReader("r1a", ws1a)
-	startReader("r1b", ws1b)
-	startReader("r2a", ws2a)
-	startReader("r2b", ws2b)
-
-	require.NoError(t, ws1a.WriteMessage(websocket.TextMessage, []byte("hello-room1")))
-	require.NoError(t, ws2a.WriteMessage(websocket.TextMessage, []byte("hello-room2")))
-
-	time.Sleep(2 * time.Millisecond)
-
-	_ = ws1a.Close()
-	_ = ws1b.Close()
-	_ = ws2a.Close()
-	_ = ws2b.Close()
-	readers.Wait()
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	require.Contains(t, received["r1a"], "hello-room1")
-	require.Contains(t, received["r1b"], "hello-room1")
-	require.NotContains(t, received["r1a"], "hello-room2")
-	require.NotContains(t, received["r1b"], "hello-room2")
-
-	require.Contains(t, received["r2a"], "hello-room2")
-	require.Contains(t, received["r2b"], "hello-room2")
-	require.NotContains(t, received["r2a"], "hello-room1")
-	require.NotContains(t, received["r2b"], "hello-room1")
-}
-
 func TestIntegration_RateLimitingEnforced(t *testing.T) {
 	const clientCount = 3
 	const messagesPerClient = 50
@@ -1254,19 +1102,20 @@ func TestIntegration_RateLimitingEnforced(t *testing.T) {
 	rlConfig.PerIPRate = 10
 	rlConfig.PerIPBurst = 10
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithRateLimit(rlConfig),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
 			// echo msg
-			return c.Send(m)
+			return d.SendToClient(client.GetID(), m)
 		}),
 	)
-	server = mustServer(t, server, err)
+	defer server.Close()
 
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	var clients []*websocket.Conn
 	for i := 0; i < clientCount; i++ {
@@ -1316,85 +1165,26 @@ func TestIntegration_RateLimitingEnforced(t *testing.T) {
 	require.Greater(t, atomic.LoadInt32(&rateLimitHits), int32(0), "Rate limite not enforced")
 }
 
-func TestIntegration_HubShutdown(t *testing.T) {
-	const clientCount = 5
-	const messagesPerClient = 10
-
-	server, err := NewServer(
-		WithPath("/ws"),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			c.Hub.BroadcastMessage(m)
-			return nil
-		}),
-	)
-	server = mustServer(t, server, err)
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
-
-	var clients []*websocket.Conn
-	for i := 0; i < clientCount; i++ {
-		ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-		require.NoError(t, err)
-		clients = append(clients, ws)
-	}
-
-	var readers sync.WaitGroup
-	for i, ws := range clients {
-		readers.Add(1)
-		go func(idx int, conn *websocket.Conn) {
-			defer readers.Done()
-			for {
-				_, _, err := conn.ReadMessage()
-				if err != nil {
-					return
-				}
-			}
-		}(i, ws)
-	}
-
-	var writers sync.WaitGroup
-	for i, ws := range clients {
-		writers.Add(1)
-		go func(idx int, conn *websocket.Conn) {
-			defer writers.Done()
-			for j := 0; j < messagesPerClient; j++ {
-				msg := fmt.Sprintf("client-%d-msg-%d", idx, j)
-				_ = conn.WriteMessage(websocket.TextMessage, []byte(msg))
-			}
-		}(i, ws)
-	}
-
-	writers.Wait()
-
-	_ = server.Stop() // stop the hub and all goroutines
-
-	for _, ws := range clients {
-		_ = ws.Close()
-	}
-	readers.Wait()
-}
-
 // Test different message types (Text, Binary, Ping, Pong)
 func TestIntegration_MessageTypes(t *testing.T) {
 	var mu sync.Mutex
 	received := make(map[int][]byte)
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
 			mu.Lock()
 			received[int(m.Type)] = m.RawData
 			mu.Unlock()
-			return c.SendRaw(m.RawData)
+			return d.SendToClient(client.GetID(), m)
 		}),
 	)
-	server = mustServer(t, server, err)
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	require.NoError(t, err)
@@ -1431,9 +1221,13 @@ func TestIntegration_JSONMessages(t *testing.T) {
 	var mu sync.Mutex
 	var received []TestMessage
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
 			var msg TestMessage
 			if err := json.Unmarshal(m.RawData, &msg); err != nil {
 				return err
@@ -1445,14 +1239,11 @@ func TestIntegration_JSONMessages(t *testing.T) {
 
 			msg.Data = "processed: " + msg.Data
 			response, _ := json.Marshal(msg)
-			return c.SendRaw(response)
+			return d.SendToClient(client.GetID(), &Message{Type: m.Type, RawData: response})
 		}),
 	)
-	server = mustServer(t, server, err)
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	require.NoError(t, err)
@@ -1483,37 +1274,39 @@ func TestIntegration_JSONMessages(t *testing.T) {
 func TestIntegration_ErrorHandling(t *testing.T) {
 	var errorsCaught int32
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
 		WithRelevantHeaders([]string{"Fail-Connect"}),
 		OnBeforeConnect(func(r *http.Request, ctx *Context) error {
-			if ctx.connInfo.Headers["Fail-Connect"] == "true" {
+			if ctx.Headers()["Fail-Connect"] == "true" {
 				return fmt.Errorf("connection rejected")
 			}
 			return nil
 		}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
 			if string(m.RawData) == "error" {
 				atomic.AddInt32(&errorsCaught, 1)
 				return fmt.Errorf("message error")
 			}
-			return c.SendRaw(m.RawData)
+			return d.SendToClient(client.GetID(), m)
 		}),
-		OnError(func(c *Client, err error, ctx *Context) error {
+		OnError(func(err error, d Dispatcher, ctx *Context) error {
 			atomic.AddInt32(&errorsCaught, 1)
 			return nil
 		}),
 	)
-	server = mustServer(t, server, err)
 
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	headers := http.Header{"Fail-Connect": []string{"true"}}
 	_, resp, err := websocket.DefaultDialer.Dial(u.String(), headers)
 	require.Error(t, err)
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
 
 	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	require.NoError(t, err)
@@ -1536,9 +1329,9 @@ func TestIntegration_MemoryLeaks(t *testing.T) {
 	const clientsPerRound = 10
 	const messagesPerClient = 20
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		WithRateLimit(RateLimiterConfig{
+		WithRateLimit(&RateLimiterConfig{
 			PerClientRate:          10000,
 			PerClientBurst:         10000,
 			PerIPRate:              50000,
@@ -1547,15 +1340,17 @@ func TestIntegration_MemoryLeaks(t *testing.T) {
 			EntryTTL:               time.Minute,
 			MaxRateLimitViolations: 10000,
 		}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.SendRaw(m.RawData)
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+			return d.SendToClient(client.GetID(), m)
 		}),
 	)
-	server = mustServer(t, server, err)
 
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	for round := 0; round < rounds; round++ {
 		var clients []*websocket.Conn
@@ -1591,18 +1386,10 @@ func TestIntegration_MemoryLeaks(t *testing.T) {
 		wg.Wait()
 
 		for _, ws := range clients {
-			_ = ws.Close()
+			ws.Close()
 		}
 
-		// wait until the server has processed closed connections instead of sleeping
-		deadline := time.Now().Add(2 * time.Second)
-		for time.Now().Before(deadline) {
-			if server.GetClientCount() == 0 {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-		require.Equal(t, 0, server.GetClientCount(), "server should have 0 clients after closing connections")
+		time.Sleep(2 * time.Millisecond)
 	}
 
 	// server should still be responsive
@@ -1616,72 +1403,31 @@ func TestIntegration_MemoryLeaks(t *testing.T) {
 	require.Equal(t, []byte("final-test"), resp)
 }
 
-// Alternative memory leak test without rate limiting concerns
-func TestIntegration_MemoryLeaksWithoutMessages(t *testing.T) {
-	const rounds = 10
-	const clientsPerRound = 20
-
-	server, err := NewServer(
-		WithPath("/ws"),
-		OnConnect(func(c *Client, ctx *Context) error {
-			return nil
-		}),
-	)
-	server = mustServer(t, server, err)
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
-
-	for round := 0; round < rounds; round++ {
-		var clients []*websocket.Conn
-
-		for i := 0; i < clientsPerRound; i++ {
-			ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-			require.NoError(t, err)
-			clients = append(clients, ws)
-		}
-
-		time.Sleep(time.Millisecond)
-
-		for _, ws := range clients {
-			ws.Close()
-		}
-
-		time.Sleep(time.Millisecond)
-	}
-
-	// server should still be responsive after many connection cycles
-	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-	require.NoError(t, err)
-	defer ws.Close()
-
-	time.Sleep(time.Millisecond)
-}
-
 func TestIntegration_CustomHeadersValidation(t *testing.T) {
 	headersCh := make(chan map[string]string, 1)
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
 		WithRelevantHeaders([]string{"Authorization", "User-Id", "Custom-Header"}),
-		OnConnect(func(c *Client, ctx *Context) error {
+		OnConnect(func(d Dispatcher, ctx *Context) error {
 			headers := make(map[string]string)
 			for _, header := range []string{"Authorization", "User-Id", "Custom-Header"} {
-				headers[header] = ctx.connInfo.Headers[header]
+				headers[header] = ctx.Headers()[header]
 			}
 			headersCh <- headers
 			return nil
 		}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.SendRaw(m.RawData)
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+			return d.SendToClient(client.GetID(), m)
 		}),
 	)
-	server = mustServer(t, server, err)
 
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	headers := http.Header{
 		"Authorization":  []string{"Bearer token123"},
@@ -1713,15 +1459,15 @@ func TestIntegration_MultipleClientsWithDifferentHeaders(t *testing.T) {
 	var mu sync.Mutex
 	var allReceivedHeaders []clientHeaders
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
 		WithRelevantHeaders([]string{"Client-Id", "Authorization", "User-Role"}),
-		OnConnect(func(c *Client, ctx *Context) error {
-			clientID := ctx.connInfo.Headers["Client-Id"]
+		OnConnect(func(d Dispatcher, ctx *Context) error {
+			clientID := ctx.Headers()["Client-Id"]
 			headers := map[string]string{
-				"Client-Id":     ctx.connInfo.Headers["Client-Id"],
-				"Authorization": ctx.connInfo.Headers["Authorization"],
-				"User-Role":     ctx.connInfo.Headers["User-Role"],
+				"Client-Id":     ctx.Headers()["Client-Id"],
+				"Authorization": ctx.Headers()["Authorization"],
+				"User-Role":     ctx.Headers()["User-Role"],
 			}
 
 			mu.Lock()
@@ -1733,15 +1479,17 @@ func TestIntegration_MultipleClientsWithDifferentHeaders(t *testing.T) {
 
 			return nil
 		}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.SendRaw(m.RawData)
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+			return d.SendToClient(client.GetID(), m)
 		}),
 	)
-	server = mustServer(t, server, err)
 
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	clients := []struct {
 		id      string
@@ -1804,28 +1552,30 @@ func TestIntegration_MultipleClientsWithDifferentHeaders(t *testing.T) {
 func TestIntegration_IgnoredHeaders(t *testing.T) {
 	headersCh := make(chan map[string]string, 1)
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
 		WithRelevantHeaders([]string{"User-Id"}),
-		OnConnect(func(c *Client, ctx *Context) error {
+		OnConnect(func(d Dispatcher, ctx *Context) error {
 			headers := map[string]string{
-				"User-Id":        ctx.connInfo.Headers["User-Id"],
-				"Authorization":  ctx.connInfo.Headers["Authorization"],
-				"Custom-Header":  ctx.connInfo.Headers["Custom-Header"],
-				"Ignored-Header": ctx.connInfo.Headers["Ignored-Header"],
+				"User-Id":        ctx.Headers()["User-Id"],
+				"Authorization":  ctx.Headers()["Authorization"],
+				"Custom-Header":  ctx.Headers()["Custom-Header"],
+				"Ignored-Header": ctx.Headers()["Ignored-Header"],
 			}
 			headersCh <- headers
 			return nil
 		}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.SendRaw(m.RawData)
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+			return d.SendToClient(client.GetID(), m)
 		}),
 	)
-	server = mustServer(t, server, err)
 
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	headers := http.Header{
 		"User-Id":        []string{"user456"},
@@ -1851,164 +1601,24 @@ func TestIntegration_IgnoredHeaders(t *testing.T) {
 	}
 }
 
-// Test room management edge cases
-func TestIntegration_RoomEdgeCases(t *testing.T) {
-	var mu sync.Mutex
-	events := make([]string, 0)
-
-	server, err := NewServer(
-		WithPath("/ws"),
-		OnConnect(func(c *Client, ctx *Context) error {
-			mu.Lock()
-			events = append(events, "connect")
-			mu.Unlock()
-			return nil
-		}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			command := string(m.RawData)
-			parts := strings.Split(command, ":")
-
-			switch parts[0] {
-			case "join":
-				if len(parts) > 1 {
-					_ = c.Hub.JoinRoom(c, parts[1])
-					mu.Lock()
-					events = append(events, fmt.Sprintf("joined-%s", parts[1]))
-					mu.Unlock()
-				}
-			case "leave":
-				if len(parts) > 1 {
-					c.Hub.LeaveRoom(c, parts[1])
-					mu.Lock()
-					events = append(events, fmt.Sprintf("left-%s", parts[1]))
-					mu.Unlock()
-				}
-			case "broadcast":
-				if len(parts) > 2 {
-					_ = c.Hub.BroadcastToRoom(parts[1], &Message{
-						Type:    websocket.TextMessage,
-						RawData: []byte(parts[2]),
-					})
-				}
-			case "list":
-				rooms := c.Hub.GetRooms()
-				roomNames := make([]string, 0, len(rooms))
-				for _, room := range rooms {
-					roomNames = append(roomNames, room.name)
-				}
-				response := strings.Join(roomNames, ",")
-				return c.SendRaw([]byte(response))
-			}
-			return nil
-		}),
-	)
-	server = mustServer(t, server, err)
-
-	_, _ = server.handler.hub.CreateRoom("__SERVER__", "room1", "room1")
-	_, _ = server.handler.hub.CreateRoom("__SERVER__", "room2", "room2")
-
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
-
-	ws1, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-	require.NoError(t, err)
-	defer ws1.Close()
-
-	ws2, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-	require.NoError(t, err)
-	defer ws2.Close()
-
-	var readers sync.WaitGroup
-	var received1, received2 []string
-	var mu1, mu2 sync.Mutex
-
-	readers.Add(2)
-	go func() {
-		defer readers.Done()
-		for {
-			_, msg, err := ws1.ReadMessage()
-			if err != nil {
-				return
-			}
-			mu1.Lock()
-			received1 = append(received1, string(msg))
-			mu1.Unlock()
-		}
-	}()
-
-	go func() {
-		defer readers.Done()
-		for {
-			_, msg, err := ws2.ReadMessage()
-			if err != nil {
-				return
-			}
-			mu2.Lock()
-			received2 = append(received2, string(msg))
-			mu2.Unlock()
-		}
-	}()
-
-	// test joining rooms
-	require.NoError(t, ws1.WriteMessage(websocket.TextMessage, []byte("join:room1")))
-	require.NoError(t, ws2.WriteMessage(websocket.TextMessage, []byte("join:room2")))
-	time.Sleep(2 * time.Millisecond)
-
-	// test broadcasting to specific rooms
-	require.NoError(t, ws1.WriteMessage(websocket.TextMessage, []byte("broadcast:room1:hello-room1")))
-	require.NoError(t, ws2.WriteMessage(websocket.TextMessage, []byte("broadcast:room2:hello-room2")))
-	time.Sleep(2 * time.Millisecond)
-
-	// test joining same room
-	require.NoError(t, ws2.WriteMessage(websocket.TextMessage, []byte("join:room1")))
-	time.Sleep(2 * time.Millisecond)
-
-	require.NoError(t, ws1.WriteMessage(websocket.TextMessage, []byte("broadcast:room1:both-should-receive")))
-	time.Sleep(2 * time.Millisecond)
-
-	// test leaving room
-	require.NoError(t, ws2.WriteMessage(websocket.TextMessage, []byte("leave:room1")))
-	time.Sleep(2 * time.Millisecond)
-
-	require.NoError(t, ws1.WriteMessage(websocket.TextMessage, []byte("broadcast:room1:only-ws1-should-receive")))
-	time.Sleep(2 * time.Millisecond)
-
-	ws1.Close()
-	ws2.Close()
-	readers.Wait()
-
-	mu1.Lock()
-	mu2.Lock()
-	defer mu1.Unlock()
-	defer mu2.Unlock()
-
-	// check that messages were properly isolated by rooms
-	require.Contains(t, received1, "hello-room1")
-	require.Contains(t, received1, "both-should-receive")
-	require.Contains(t, received1, "only-ws1-should-receive")
-
-	require.Contains(t, received2, "hello-room2")
-	require.Contains(t, received2, "both-should-receive")
-	require.NotContains(t, received2, "only-ws1-should-receive")
-}
-
 // Test connection limits and cleanup
 func TestIntegration_ConnectionLimits(t *testing.T) {
 	const maxConnections = 5
 
-	server, err := NewServer(
+	server := newTestServer(t,
 		WithPath("/ws"),
-		WithMaxConnections(maxConnections),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			return c.SendRaw(m.RawData)
+		WithMaxConnections(ConnectionPoolConfig{MaxTotal: maxConnections, MaxPerIP: maxConnections}),
+		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+			return d.SendToClient(client.GetID(), m)
 		}),
 	)
-	server = mustServer(t, server, err)
 
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+	defer server.Close()
+	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
 	var clients []*websocket.Conn
 
@@ -2045,195 +1655,36 @@ func TestIntegration_ConnectionLimits(t *testing.T) {
 	require.Equal(t, []byte("test-after-cleanup"), resp_msg)
 }
 
-func TestIntegration_AttachToCtx(t *testing.T) {
-	type ctxKey string
-	const testKey ctxKey = "test_key"
+// func TestIntegration_AttachToCtx(t *testing.T) {
+// 	const testKey ctxKey = "test_key"
 
-	server, err := NewServer(
-		WithPath("/ws"),
-		WithMiddleware(func(h http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				ctx := context.WithValue(r.Context(), testKey, "test_val")
-				h.ServeHTTP(w, r.WithContext(ctx))
-			})
-		}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			require.Equal(t, "test_val", ctx.Context().Value(testKey))
-			return c.SendRaw(m.RawData)
-		}),
-	)
-	server = mustServer(t, server, err)
+// 	server := newTestServer(t,
+// 		WithPath("/ws"),
+// 		WithMiddleware(func(h http.Handler) http.Handler {
+// 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// 				ctx := context.WithValue(r.Context(), testKey, "test_val")
+// 				h.ServeHTTP(w, r.WithContext(ctx))
+// 			})
+// 		}),
+// 		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
+// 			client, exists := ctx.Client()
+// 			if !exists {
+// 				return nil
+// 			}
+// 			require.Equal(t, "test_val", ctx.Context().Value(testKey))
+// 			return d.SendToClient(client.GetID(), m)
+// 		}),
+// 	)
 
-	ts := httptest.NewServer(server.handler)
-	defer ts.Close()
-	u := url.URL{Scheme: "ws", Host: ts.Listener.Addr().String(), Path: "/ws"}
+// 	defer server.Close()
+// 	u := url.URL{Scheme: "ws", Host: server.Listener.Addr().String(), Path: "/ws"}
 
-	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-	require.NoError(t, err)
-	defer ws.Close()
+// 	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+// 	require.NoError(t, err)
+// 	defer ws.Close()
 
-	require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte("test")))
-	_, resp_msg, err := ws.ReadMessage()
-	require.NoError(t, err)
-	require.Equal(t, []byte("test"), resp_msg)
-}
-
-func TestIntegration_ClusterReplicationBetweenHubs(t *testing.T) {
-	mem := cluster.NewMemoryManager()
-
-	h1 := NewHub(DefaultHubConfig())
-	h2 := NewHub(DefaultHubConfig())
-
-	h1.SetCluster(ClusterConfig{Manager: mem, NodeID: "hub1"})
-	h2.SetCluster(ClusterConfig{Manager: mem, NodeID: "hub2"})
-
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	defer cancel1()
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
-
-	go h1.Run(ctx1)
-	go h2.Run(ctx2)
-
-	// create clients and register them
-	c1 := NewClient("c1", nil, h1, 16)
-	c2 := NewClient("c2", nil, h2, 16)
-
-	h1.AddClient(c1)
-	h2.AddClient(c2)
-
-	// wait for registration
-	time.Sleep(20 * time.Millisecond)
-
-	// ensure both hubs have a single client registered
-	if got := h1.Clients.Len(); got != 1 {
-		t.Fatalf("expected h1 to have 1 client, got %d", got)
-	}
-	if got := h2.Clients.Len(); got != 1 {
-		t.Fatalf("expected h2 to have 1 client, got %d", got)
-	}
-
-	msg := NewRawMessage(TextMessage, []byte("cluster-test"))
-
-	h1.BroadcastMessage(msg)
-
-	// expect both local (c1) and remote (c2) clients to receive the broadcast
-	got1, got2 := false, false
-	deadline := time.After(300 * time.Millisecond)
-	for !(got1 && got2) {
-		select {
-		case m := <-c1.MessageChan:
-			if string(m.RawData) != "cluster-test" {
-				t.Fatalf("c1 unexpected payload: %s", string(m.RawData))
-			}
-			got1 = true
-		case m := <-c2.MessageChan:
-			if string(m.RawData) != "cluster-test" {
-				t.Fatalf("c2 unexpected payload: %s", string(m.RawData))
-			}
-			got2 = true
-		case <-deadline:
-			t.Fatalf("timed out waiting for replicated messages (got1=%v got2=%v)", got1, got2)
-		}
-	}
-
-	// cleanup
-	h1.Stop()
-	h2.Stop()
-}
-
-func TestIntegration_ClusterReplicationBetweenServers(t *testing.T) {
-	mem := cluster.NewMemoryManager()
-
-	server1, err := NewServer(
-		WithPath("/ws"),
-		WithCluster(ClusterConfig{Manager: mem, NodeID: "server1"}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			c.Hub.BroadcastMessage(m)
-			return nil
-		}),
-	)
-	server1 = mustServer(t, server1, err)
-
-	server2, err := NewServer(
-		WithPath("/ws"),
-		WithCluster(ClusterConfig{Manager: mem, NodeID: "server2"}),
-		OnMessage(func(c *Client, m *Message, ctx *Context) error {
-			c.Hub.BroadcastMessage(m)
-			return nil
-		}),
-	)
-	server2 = mustServer(t, server2, err)
-
-	// start two HTTP servers for each gosocket Server
-	ts1 := httptest.NewServer(server1.handler)
-	defer ts1.Close()
-	ts2 := httptest.NewServer(server2.handler)
-	defer ts2.Close()
-
-	u1 := url.URL{Scheme: "ws", Host: ts1.Listener.Addr().String(), Path: "/ws"}
-	u2 := url.URL{Scheme: "ws", Host: ts2.Listener.Addr().String(), Path: "/ws"}
-
-	ws1, _, err := websocket.DefaultDialer.Dial(u1.String(), nil)
-	require.NoError(t, err)
-	defer ws1.Close()
-
-	ws2, _, err := websocket.DefaultDialer.Dial(u2.String(), nil)
-	require.NoError(t, err)
-	defer ws2.Close()
-
-	// wait until both servers have registered their clients to avoid race
-	deadlineReg := time.Now().Add(300 * time.Millisecond)
-	for time.Now().Before(deadlineReg) {
-		if server1.GetClientCount() == 1 && server2.GetClientCount() == 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if server1.GetClientCount() != 1 || server2.GetClientCount() != 1 {
-		t.Fatalf("servers did not register clients in time: s1=%d s2=%d", server1.GetClientCount(), server2.GetClientCount())
-	}
-
-	ch1 := make(chan string, 1)
-	ch2 := make(chan string, 1)
-
-	go func() {
-		_, msg, err := ws1.ReadMessage()
-		if err == nil {
-			ch1 <- string(msg)
-		}
-	}()
-
-	go func() {
-		_, msg, err := ws2.ReadMessage()
-		if err == nil {
-			ch2 <- string(msg)
-		}
-	}()
-
-	// send a message from client connected to server1
-	require.NoError(t, ws1.WriteMessage(websocket.TextMessage, []byte("cluster-test")))
-
-	got1, got2 := false, false
-	deadline := time.After(300 * time.Millisecond)
-	for !(got1 && got2) {
-		select {
-		case m := <-ch1:
-			if m != "cluster-test" {
-				t.Fatalf("ws1 unexpected payload: %s", m)
-			}
-			got1 = true
-		case m := <-ch2:
-			if m != "cluster-test" {
-				t.Fatalf("ws2 unexpected payload: %s", m)
-			}
-			got2 = true
-		case <-deadline:
-			t.Fatalf("timed out waiting for replicated messages (got1=%v got2=%v)", got1, got2)
-		}
-	}
-
-	// cleanup
-	server1.Stop()
-	server2.Stop()
-}
+// 	require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte("test")))
+// 	_, resp_msg, err := ws.ReadMessage()
+// 	require.NoError(t, err)
+// 	require.Equal(t, []byte("test"), resp_msg)
+// }

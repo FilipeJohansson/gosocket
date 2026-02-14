@@ -3,353 +3,234 @@
 
 package gosocket
 
+/**
+ * gosocket.go is the public facade of the GoSocket library.
+ * It exposes the main entry points such as NewServer, NewHandler,
+ * and other user-facing constructors.
+ *
+ * This file is responsible for translating public options into
+ * internal runtime configuration and wiring the correct bootstrap
+ * (server or handler) without exposing internal implementation details.
+ *
+ * This file must be the only public entry point for creating GoSocket
+ * instances and should remain stable over time.
+ *
+ * MUST NOT contain business logic, state management, cluster logic,
+ * dispatcher logic, or direct networking code.
+ */
+
 import (
-	"time"
+	"context"
+
+	"github.com/FilipeJohansson/gosocket/internal/cluster"
+	"github.com/FilipeJohansson/gosocket/internal/cluster/backends"
+	"github.com/FilipeJohansson/gosocket/internal/cluster/store"
+	"github.com/FilipeJohansson/gosocket/internal/dispatcher"
+	"github.com/FilipeJohansson/gosocket/internal/hub"
+	"github.com/FilipeJohansson/gosocket/internal/logger"
+	"github.com/FilipeJohansson/gosocket/internal/message"
+	"github.com/FilipeJohansson/gosocket/internal/runtime"
+	"github.com/FilipeJohansson/gosocket/internal/transport"
+	"github.com/FilipeJohansson/gosocket/internal/transport/websocket"
 )
 
-// ===== Functional Options =====
+// ===== TYPE ALIASES =====
+// * Websocket
+type Context = websocket.Context
+type OnStartFunc = websocket.OnStartFunc
+type OnBeforeConnectFunc = websocket.OnBeforeConnectFunc
+type OnConnectFunc = websocket.OnConnectFunc
+type OnDisconnectFunc = websocket.OnDisconnectFunc
+type OnMessageFunc = websocket.OnMessageFunc
+type OnRawMessageFunc = websocket.OnRawMessageFunc
+type OnJSONMessageFunc = websocket.OnJSONMessageFunc
+type OnProtobufMessageFunc = websocket.OnProtobufMessageFunc
+type OnErrorFunc = websocket.OnErrorFunc
+type OnPingFunc = websocket.OnPingFunc
+type OnPongFunc = websocket.OnPongFunc
 
-// WithMaxConnections sets the maximum number of connections allowed for a handler.
-// If the limit is exceeded, new connections will be rejected with an error.
-// The limit must be greater than 0.
-func WithMaxConnections(max int) UniversalOption {
-	return func(h HasHandler) error {
-		if max <= 0 {
-			return ErrMaxConnectionsLessThanOne
-		}
+// * Message
+type Message = message.Message
+type MessageType = message.MessageType
+type EncodingType = message.EncodingType
 
-		h.Handler().config.MaxConnections = max
-		return nil
+const (
+	TextMessage   = message.TextMessage
+	BinaryMessage = message.BinaryMessage
+	CloseMessage  = message.CloseMessage
+	PingMessage   = message.PingMessage
+	PongMessage   = message.PongMessage
+
+	JSON = message.JSON
+	Raw  = message.Raw
+)
+
+// * Hub
+type Hub = hub.Hub
+type Client = hub.Client
+type Room = hub.Room
+
+// * Logger
+type LogType = logger.LogType
+type LogLevel = logger.LogLevel
+
+type Logger = logger.Logger
+type LoggerConfig = logger.LoggerConfig
+
+type DefaultLogger = logger.DefaultLogger
+type NullLogger = logger.NullLogger
+
+const (
+	LogTypeServer     = logger.LogTypeServer
+	LogTypeClient     = logger.LogTypeClient
+	LogTypeAuth       = logger.LogTypeAuth
+	LogTypeBroadcast  = logger.LogTypeBroadcast
+	LogTypeConnection = logger.LogTypeConnection
+	LogTypeMessage    = logger.LogTypeMessage
+	LogTypeError      = logger.LogTypeError
+	LogTypeRateLimit  = logger.LogTypeRateLimit
+	LogTypeRoom       = logger.LogTypeRoom
+	LogTypeOther      = logger.LogTypeOther
+)
+
+const (
+	LogLevelNone  = logger.LogLevelNone
+	LogLevelError = logger.LogLevelError
+	LogLevelWarn  = logger.LogLevelWarn
+	LogLevelInfo  = logger.LogLevelInfo
+	LogLevelDebug = logger.LogLevelDebug
+)
+
+// * Connection Pool
+type ConnectionPoolConfig = transport.ConnectionPoolConfig
+
+func NewMessage(msgType MessageType, data interface{}) *Message {
+	return message.NewMessage(msgType, data)
+}
+
+func NewMessageWithEncoding(msgType MessageType, data interface{}, encoding EncodingType) *Message {
+	return message.NewMessageWithEncoding(msgType, data, encoding)
+}
+
+func NewRawMessage(msgType MessageType, rawData []byte) *Message {
+	return message.NewRawMessage(msgType, rawData)
+}
+
+// * Cluster
+type ClusterSubscription = cluster.Subscription
+type ClusterConfig = cluster.ClusterConfig
+type ClusterManager = cluster.Manager
+type ClusterStateStore = store.StateStore
+type ClusterEvent = cluster.Event
+type ClusterEventType = cluster.EventType
+type ClusterClientLocation = store.ClientLocation
+
+const (
+	ClusterEventSendToClient    = cluster.EventSendToClient
+	ClusterEventBroadcast       = cluster.EventBroadcast
+	ClusterEventBroadcastToRoom = cluster.EventBroadcastToRoom
+)
+
+// This should only be used for testing, examples and simulations
+func NewTestMemoryManager() ClusterManager {
+	return backends.NewTestMemoryManager()
+}
+
+// This should only be used for testing, examples and simulations
+func NewTestRedisManager(addr string, topic string, nodeID string) (ClusterManager, error) {
+	return backends.NewRedisManager(addr, topic, nodeID)
+}
+
+// This should only be used for testing, examples and simulations
+func NewTestMemoryStateStore() ClusterStateStore {
+	return store.NewMemoryStateStore()
+}
+
+// * Dispatcher
+type Dispatcher = dispatcher.Dispatcher
+type ClientDTO = dispatcher.ClientDTO
+type RoomDTO = dispatcher.RoomDTO
+
+// * Rate Limit
+type RateLimiterConfig = transport.RateLimiterConfig
+
+// ===== CONSTRUCTORS =====
+
+func NewServer(opts ...websocket.UniversalOption) (*websocket.Server, error) {
+	handler, err := websocket.NewHandler(opts...)
+	if err != nil {
+		return nil, err
 	}
-}
 
-// WithMessageSize sets the maximum size of an incoming message in bytes. If the message size is exceeded, the connection will be closed with an error.
-// The size must be greater than 0.
-func WithMessageSize(size int64) UniversalOption {
-	return func(h HasHandler) error {
-		if size <= 0 {
-			return ErrMessageSizeLessThanOne
-		}
-
-		h.Handler().config.MessageSize = size
-		return nil
+	runtime, err := runtime.NewRuntime(runtime.Config{
+		Cluster: handler.Config.ClusterManager,
+		State:   handler.Config.ClusterState,
+		NodeID:  handler.Config.NodeID,
+		HubConfig: &hub.HubConfig{
+			Logger:             handler.Config.Logger,
+			BackpressurePolicy: hub.DropNewest, // TODO: make configurable
+		},
+	})
+	if err != nil {
+		return nil, err
 	}
+
+	return websocket.NewServer(runtime, handler, opts...)
 }
 
-// WithTimeout sets the read and write timeouts for a handler. If the read timeout is
-// exceeded, the connection will be closed with an error. If the write timeout is
-// exceeded, the write will be cancelled and the connection will be closed with an
-// error. The timeouts must be greater than 0.
-func WithTimeout(read, write time.Duration) UniversalOption {
-	return func(h HasHandler) error {
-		if read <= 0 || write <= 0 {
-			return ErrTimeoutsLessThanOne
-		}
-
-		h.Handler().config.ReadTimeout = read
-		h.Handler().config.WriteTimeout = write
-		return nil
+func NewHandler(opts ...websocket.UniversalOption) (*websocket.Handler, error) {
+	handler, err := websocket.NewHandler(opts...)
+	if err != nil {
+		return nil, err
 	}
-}
 
-// WithPingPong sets the ping and pong wait periods for a handler. The ping period
-// is the interval at which the handler sends a ping message to a client. The pong
-// wait is the maximum time allowed for a client to respond to a ping message.
-// If the pong wait is exceeded, the connection will be closed with an error.
-// The ping and pong wait periods must be greater than 0 and the pong wait must be
-// greater than the ping period.
-func WithPingPong(pingPeriod, pongWait time.Duration) UniversalOption {
-	return func(h HasHandler) error {
-		if pingPeriod <= 0 || pongWait <= 0 {
-			return ErrPingPongLessThanOne
-		}
-
-		if pingPeriod > pongWait {
-			return ErrPongWaitLessThanPing
-		}
-
-		h.Handler().config.PingPeriod = pingPeriod
-		h.Handler().config.PongWait = pongWait
-		return nil
+	runtime, err := runtime.NewRuntime(runtime.Config{
+		Cluster: handler.Config.ClusterManager,
+		State:   handler.Config.ClusterState,
+		NodeID:  handler.Config.NodeID,
+		HubConfig: &hub.HubConfig{
+			Logger:             handler.Config.Logger,
+			BackpressurePolicy: hub.DropNewest, // TODO: make configurable
+		},
+	})
+	if err != nil {
+		return nil, err
 	}
-}
 
-// WithAllowedOrigins sets the allowed origins for a handler. If the origins are
-// specified, the handler will only allow incoming requests from the specified
-// origins. If the origins are empty, the handler will allow incoming requests from
-// any origin. The origins must be in the format "scheme://host[:port]".
-func WithAllowedOrigins(origins []string) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().config.AllowedOrigins = origins
-		return nil
+	ctx, cancel := context.WithCancel(context.Background())
+	if err = runtime.Start(handler.Config.Serializers, ctx, cancel); err != nil {
+		cancel()
+		return nil, err
 	}
-}
 
-// WithEncoding sets the default encoding for a handler. The encoding is used to
-// serialize outgoing messages and deserialize incoming messages. The default
-// encoding is JSON, but you can change it to any of the supported encodings
-// (JSON, Protobuf, Raw). If the encoding is not supported, an error will be
-// returned.
-func WithEncoding(encoding EncodingType) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().config.DefaultEncoding = encoding
-		return nil
-	}
-}
-
-// WithSerializer sets a custom serializer for the specified encoding type.
-//
-// The serializer will be used to serialize outgoing messages and deserialize
-// incoming messages for the specified encoding type. The encoding type must be
-// one of the supported encoding types (JSON, Protobuf, Raw). If the encoding type
-// is not supported, an error will be returned.
-//
-// The serializer will be used for all incoming and outgoing messages with the
-// specified encoding type. If you want to use a different serializer for a
-// specific message, you can use the WithEncoding option on the message.
-func WithSerializer(encoding EncodingType, serializer Serializer) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().serializers[encoding] = serializer
-		return nil
-	}
-}
-
-// WithJSONSerializer sets the default JSON serializer for a handler. The
-// serializer will be used to serialize outgoing messages and deserialize
-// incoming messages for the JSON encoding type. The default JSON serializer
-// will be used if no other serializer is specified.
-func WithJSONSerializer() UniversalOption {
-	return WithSerializer(JSON, CreateSerializer(JSON, DefaultSerializerConfig()))
-}
-
-// WithProtobufSerializer sets the default Protobuf serializer for a handler. The
-// serializer will be used to serialize outgoing messages and deserialize
-// incoming messages for the Protobuf encoding type. The default Protobuf
-// serializer will be used if no other serializer is specified.
-func WithProtobufSerializer() UniversalOption {
-	return WithSerializer(Protobuf, CreateSerializer(Protobuf, DefaultSerializerConfig()))
-}
-
-// WithRawSerializer sets the default Raw serializer for a handler. The
-// serializer will be used to serialize outgoing messages and deserialize
-// incoming messages for the Raw encoding type. The default Raw serializer
-// will be used if no other serializer is specified.
-func WithRawSerializer() UniversalOption {
-	return WithSerializer(Raw, CreateSerializer(Raw, DefaultSerializerConfig()))
-}
-
-// WithCluster configures a ClusterManager for the handler's hub. Passing nil
-// resets the hub to use a no-op cluster manager.
-func WithCluster(c ClusterConfig) UniversalOption {
-	return func(h HasHandler) error {
-		if h == nil || h.Handler() == nil || h.Handler().Hub() == nil {
-			return nil
-		}
-		h.Handler().Hub().SetCluster(c)
-		return nil
-	}
-}
-
-// WithMiddleware adds a middleware to the handler. The middleware will be
-// applied to the handler in the order it is specified. If no middlewares are
-// specified, the handler will not apply any middlewares. The middleware will
-// receive the original request and response as arguments, and can return a new
-// request and response. If the middleware returns an error, the handler will
-// return the error to the client. If the middleware does not return an error, the
-// handler will call the next middleware in the chain. If the middleware chain
-// returns an error, the handler will return the error to the client. If the
-// middleware chain does not return an error, the handler will call the original
-// handler with the modified request and response. If the original handler returns
-// an error, the handler will return the error to the client. If the original
-// handler does not return an error, the handler will return the result of the
-// original handler to the client.
-func WithMiddleware(middleware Middleware) UniversalOption {
-	return func(h HasHandler) error {
-		if h.Handler().middlewares == nil {
-			h.Handler().middlewares = make([]Middleware, 0)
-		}
-
-		h.Handler().middlewares = append(h.Handler().middlewares, middleware)
-		return nil
-	}
-}
-
-// WithAuth sets an authentication function for a handler. The authentication
-// function will be called with the original request as an argument when a new
-// client connects to the handler. If the authentication function returns an
-// error, the client will be immediately disconnected. If the authentication
-// function does not return an error, the client will be authenticated and
-// connected to the handler. The authentication function can return a value to
-// be associated with the client, which can be accessed later in the
-// OnConnect, OnDisconnect, OnMessage, OnRawMessage, OnJSONMessage, and
-// OnProtobufMessage handlers. The authentication function can also return an
-// error, which will be returned to the client. If the authentication function
-// returns an error, the client will not be connected to the handler. If the
-// authentication function does not return an error, the client will be
-// connected to the handler. The authentication function is called before the
-// OnConnect handler is called.
-func WithAuth(authFunc AuthFunc) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().authFunc = authFunc
-		return nil
-	}
-}
-
-// WithCustomClientID sets a custom client ID generator for a handler. The
-// generator will be called with the original request and associated user data
-// (from authentication, if any) when a new client connects to the handler.
-// If the generator returns an error, the connection will be rejected with HTTP 500.
-// If the generator returns an empty string, the connection will also be rejected.
-// The generator is called after authentication but before the WebSocket upgrade
-// and OnConnect handler, allowing the OnConnect handler to access the generated
-// client ID through the Client object.
-func WithCustomClientID(generator ClientIdGenerator) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().clientIdGenerator = generator
-		return nil
-	}
-}
-
-func WithMaxDepth(depth int) UniversalOption {
-	return func(h HasHandler) error {
-		if depth < 1 {
-			return ErrDepthLessThanOne
-		}
-
-		handler := h.Handler()
-		handler.config.Serialization.MaxDepth = depth
-
-		for encoding, serializer := range handler.serializers {
-			serializer.Configure(handler.config.Serialization)
-			handler.serializers[encoding] = serializer
-		}
-
-		return nil
-	}
-}
-
-func WithMaxKeys(keys int) UniversalOption {
-	return func(h HasHandler) error {
-		if keys < 1 {
-			return ErrMaxKeyLengthLessThanOne
-		}
-
-		handler := h.Handler()
-		handler.config.Serialization.MaxKeys = keys
-
-		for encoding, serializer := range handler.serializers {
-			serializer.Configure(handler.config.Serialization)
-			handler.serializers[encoding] = serializer
-		}
-
-		return nil
-	}
-}
-
-func WithMaxElements(elements int) UniversalOption {
-	return func(h HasHandler) error {
-		if elements < 1 {
-			return ErrMaxElementsLessThanOne
-		}
-
-		handler := h.Handler()
-		handler.config.Serialization.MaxElements = elements
-
-		for encoding, serializer := range handler.serializers {
-			serializer.Configure(handler.config.Serialization)
-			handler.serializers[encoding] = serializer
-		}
-
-		return nil
-	}
-}
-
-func WithDisallowedTypes(types []string) UniversalOption {
-	return func(h HasHandler) error {
-		handler := h.Handler()
-		handler.config.Serialization.DisallowedTypes = types
-
-		for encoding, serializer := range handler.serializers {
-			serializer.Configure(handler.config.Serialization)
-			handler.serializers[encoding] = serializer
-		}
-
-		return nil
-	}
-}
-
-func WithStrictSerialization(enabled bool) UniversalOption {
-	return func(h HasHandler) error {
-		handler := h.Handler()
-		handler.config.Serialization.EnableStrict = enabled
-
-		for encoding, serializer := range handler.serializers {
-			serializer.Configure(handler.config.Serialization)
-			handler.serializers[encoding] = serializer
-		}
-
-		return nil
-	}
-}
-
-func WithMaxBinarySize(size int64) UniversalOption {
-	return func(h HasHandler) error {
-		if size <= 0 {
-			return ErrMaxBinarySizeLessThanOne
-		}
-
-		handler := h.Handler()
-		handler.config.Serialization.MaxBinarySize = size
-
-		for encoding, serializer := range handler.serializers {
-			serializer.Configure(handler.config.Serialization)
-			handler.serializers[encoding] = serializer
-		}
-
-		return nil
-	}
-}
-
-func WithRelevantHeaders(headers []string) UniversalOption {
-	return func(h HasHandler) error {
-		handler := h.Handler()
-		handler.config.RelevantHeaders = headers
-		return nil
-	}
-}
-
-func WithMessageBufferSize(size int) UniversalOption {
-	return func(h HasHandler) error {
-		handler := h.Handler()
-		handler.config.MessageChanBufSize = size
-		return nil
-	}
-}
-
-func WithRateLimit(config RateLimiterConfig) UniversalOption {
-	return func(h HasHandler) error {
-		handler := h.Handler()
-		handler.rateLimiter = NewRateLimiterManager(config)
-		return nil
-	}
-}
-
-func WithLogger(logger Logger, levels map[LogType]LogLevel) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().logger = &LoggerConfig{
-			Logger: logger,
-			Level:  levels,
-		}
-		return nil
-	}
+	handler.AttachRuntime(runtime)
+	return handler, nil
 }
 
 // ===== EVENTS HANDLERS =====
 
-func OnBeforeConnect(handler OnBeforeConnectFunc) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().events.OnBeforeConnect = handler
-		return nil
+func OnStart(handler OnStartFunc) websocket.UniversalOption {
+	return websocket.UniversalOptionFunc{
+		ApplyHandlerFn: func(h *websocket.Handler) error {
+			if h == nil {
+				return nil
+			}
+
+			h.Events.OnStart = handler
+			return nil
+		},
+	}
+}
+
+func OnBeforeConnect(handler OnBeforeConnectFunc) websocket.UniversalOption {
+	return websocket.UniversalOptionFunc{
+		ApplyHandlerFn: func(h *websocket.Handler) error {
+			if h == nil {
+				return nil
+			}
+			h.Events.OnBeforeConnect = handler
+			return nil
+		},
 	}
 }
 
@@ -362,10 +243,15 @@ func OnBeforeConnect(handler OnBeforeConnectFunc) UniversalOption {
 // return an error, the client will be connected to the handler. The OnConnect
 // handler can also be used to set the client's name and rooms. The OnConnect
 // handler is called before the OnMessage handler is called.
-func OnConnect(handler OnConnectFunc) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().events.OnConnect = handler
-		return nil
+func OnConnect(handler OnConnectFunc) websocket.UniversalOption {
+	return websocket.UniversalOptionFunc{
+		ApplyHandlerFn: func(h *websocket.Handler) error {
+			if h == nil {
+				return nil
+			}
+			h.Events.OnConnect = handler
+			return nil
+		},
 	}
 }
 
@@ -379,10 +265,15 @@ func OnConnect(handler OnConnectFunc) UniversalOption {
 // OnDisconnect handler is called after the client has been disconnected from
 // the handler. The OnDisconnect handler can also be used to clean up resources
 // associated with the client.
-func OnDisconnect(handler OnDisconnectFunc) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().events.OnDisconnect = handler
-		return nil
+func OnDisconnect(handler OnDisconnectFunc) websocket.UniversalOption {
+	return websocket.UniversalOptionFunc{
+		ApplyHandlerFn: func(h *websocket.Handler) error {
+			if h == nil {
+				return nil
+			}
+			h.Events.OnDisconnect = handler
+			return nil
+		},
 	}
 }
 
@@ -396,10 +287,15 @@ func OnDisconnect(handler OnDisconnectFunc) UniversalOption {
 // will be processed as usual. The OnMessage handler is called after the
 // OnRawMessage handler is called. The OnMessage handler can also be used to
 // modify the message before it is processed by the handler.
-func OnMessage(handler OnMessageFunc) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().events.OnMessage = handler
-		return nil
+func OnMessage(handler OnMessageFunc) websocket.UniversalOption {
+	return websocket.UniversalOptionFunc{
+		ApplyHandlerFn: func(h *websocket.Handler) error {
+			if h == nil {
+				return nil
+			}
+			h.Events.OnMessage = handler
+			return nil
+		},
 	}
 }
 
@@ -413,10 +309,15 @@ func OnMessage(handler OnMessageFunc) UniversalOption {
 // will be processed as usual. The OnRawMessage handler is called before the
 // OnMessage handler is called. The OnRawMessage handler can also be used to
 // modify the message before it is processed by the OnMessage handler.
-func OnRawMessage(handler OnRawMessageFunc) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().events.OnRawMessage = handler
-		return nil
+func OnRawMessage(handler OnRawMessageFunc) websocket.UniversalOption {
+	return websocket.UniversalOptionFunc{
+		ApplyHandlerFn: func(h *websocket.Handler) error {
+			if h == nil {
+				return nil
+			}
+			h.Events.OnRawMessage = handler
+			return nil
+		},
 	}
 }
 
@@ -430,10 +331,15 @@ func OnRawMessage(handler OnRawMessageFunc) UniversalOption {
 // will be processed as usual. The OnJSONMessage handler is called after the
 // OnRawMessage handler is called. The OnJSONMessage handler can also be used to
 // modify the JSON data before it is processed by the handler.
-func OnJSONMessage(handler OnJSONMessageFunc) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().events.OnJSONMessage = handler
-		return nil
+func OnJSONMessage(handler OnJSONMessageFunc) websocket.UniversalOption {
+	return websocket.UniversalOptionFunc{
+		ApplyHandlerFn: func(h *websocket.Handler) error {
+			if h == nil {
+				return nil
+			}
+			h.Events.OnJSONMessage = handler
+			return nil
+		},
 	}
 }
 
@@ -448,10 +354,15 @@ func OnJSONMessage(handler OnJSONMessageFunc) UniversalOption {
 // handler is called after the OnRawMessage handler is called. The
 // OnProtobufMessage handler can also be used to modify the Protobuf data before
 // it is processed by the handler.
-func OnProtobufMessage(handler OnProtobufMessageFunc) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().events.OnProtobufMessage = handler
-		return nil
+func OnProtobufMessage(handler OnProtobufMessageFunc) websocket.UniversalOption {
+	return websocket.UniversalOptionFunc{
+		ApplyHandlerFn: func(h *websocket.Handler) error {
+			if h == nil {
+				return nil
+			}
+			h.Events.OnProtobufMessage = handler
+			return nil
+		},
 	}
 }
 
@@ -464,10 +375,15 @@ func OnProtobufMessage(handler OnProtobufMessageFunc) UniversalOption {
 // ignored. If the handler does not return an error, the error will be logged.
 // The OnError handler is called after the error has been logged. The OnError
 // handler can also be used to clean up resources associated with the client.
-func OnError(handler OnErrorFunc) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().events.OnError = handler
-		return nil
+func OnError(handler OnErrorFunc) websocket.UniversalOption {
+	return websocket.UniversalOptionFunc{
+		ApplyHandlerFn: func(h *websocket.Handler) error {
+			if h == nil {
+				return nil
+			}
+			h.Events.OnError = handler
+			return nil
+		},
 	}
 }
 
@@ -481,10 +397,15 @@ func OnError(handler OnErrorFunc) UniversalOption {
 // handler is called before the ping message is sent to the client. The OnPing
 // handler can also be used to modify the ping message before it is sent to the
 // client.
-func OnPing(handler OnPingFunc) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().events.OnPing = handler
-		return nil
+func OnPing(handler OnPingFunc) websocket.UniversalOption {
+	return websocket.UniversalOptionFunc{
+		ApplyHandlerFn: func(h *websocket.Handler) error {
+			if h == nil {
+				return nil
+			}
+			h.Events.OnPing = handler
+			return nil
+		},
 	}
 }
 
@@ -498,9 +419,14 @@ func OnPing(handler OnPingFunc) UniversalOption {
 // usual. The OnPong handler is called after the pong message is processed. The
 // OnPong handler can also be used to clean up resources associated with the
 // client.
-func OnPong(handler OnPongFunc) UniversalOption {
-	return func(h HasHandler) error {
-		h.Handler().events.OnPong = handler
-		return nil
+func OnPong(handler OnPongFunc) websocket.UniversalOption {
+	return websocket.UniversalOptionFunc{
+		ApplyHandlerFn: func(h *websocket.Handler) error {
+			if h == nil {
+				return nil
+			}
+			h.Events.OnPong = handler
+			return nil
+		},
 	}
 }

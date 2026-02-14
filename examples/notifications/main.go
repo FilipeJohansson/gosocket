@@ -40,14 +40,19 @@ func main() {
 	go func() {
 		for {
 			time.Sleep(15 * time.Second)
-			ws.BroadcastJSON(Message{
-				Type: "notification",
-				Data: Notification{
-					Title: "System Alert",
-					Body:  "Server is running perfectly!",
-					Icon:  "https://placehold.co/50",
+			ws.Dispatcher().Broadcast(gosocket.NewMessageWithEncoding(
+				gosocket.TextMessage,
+				Message{
+					Type: "notification",
+					Data: Notification{
+						Title: "System Alert",
+						Body:  "Server is running perfectly!",
+						Icon:  "https://placehold.co/50",
+					},
 				},
-			})
+				gosocket.JSON,
+			),
+			)
 		}
 	}()
 
@@ -59,18 +64,23 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func onConnect(client *gosocket.Client, ctx *gosocket.Context) error {
-	return client.SendJSON(Message{
-		Type: "notification",
-		Data: Notification{
-			Title: "Welcome!",
-			Body:  "You're now connected to GoSocket notifications",
-			Icon:  "https://placehold.co/50",
+func onConnect(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+	client, _ := ctx.Client()
+	return d.SendToClient(client.GetID(), gosocket.NewMessageWithEncoding(
+		gosocket.TextMessage,
+		Message{
+			Type: "notification",
+			Data: Notification{
+				Title: "Welcome!",
+				Body:  "You're now connected to GoSocket notifications",
+				Icon:  "https://placehold.co/50",
+			},
 		},
-	})
+		gosocket.JSON,
+	))
 }
 
-func onMessage(client *gosocket.Client, data interface{}, ctx *gosocket.Context) error {
+func onMessage(data interface{}, d gosocket.Dispatcher, ctx *gosocket.Context) error {
 	jsonBytes, _ := json.Marshal(data)
 	var msg Message
 	json.Unmarshal(jsonBytes, &msg)
@@ -86,7 +96,7 @@ func onMessage(client *gosocket.Client, data interface{}, ctx *gosocket.Context)
 			},
 		})
 		message.Encoding = gosocket.JSON
-		ctx.Hub().BroadcastMessage(message)
+		d.Broadcast(message)
 	}
 
 	return nil

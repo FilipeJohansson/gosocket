@@ -30,6 +30,7 @@ func main() {
 	ws, err := gosocket.NewServer(
 		gosocket.WithPort(8081),
 		gosocket.WithPath("/ws"),
+		gosocket.OnStart(onStart),
 		gosocket.OnConnect(onConnect),
 		gosocket.OnDisconnect(onDisconnect),
 		gosocket.OnJSONMessage(onMessage),
@@ -49,23 +50,46 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func onConnect(client *gosocket.Client, ctx *gosocket.Context) error {
-	client.JoinRoom("lobby")
-	return client.SendJSON(Message{
-		Type: "welcome",
-		Data: "Welcome to Game Lobby!",
-		Time: time.Now(),
-	})
+func onStart(ctx *gosocket.Context) error {
+	ctx.CreateRoom("__SERVER__", "lobby")
+	return nil
 }
 
-func onDisconnect(client *gosocket.Client, ctx *gosocket.Context) error {
+func onConnect(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+	client, exists := ctx.Client()
+	if !exists {
+		return nil
+	}
+	ctx.JoinRoom(client.GetID(), "lobby")
+	err := d.SendToClient(client.GetID(), gosocket.NewMessageWithEncoding(
+		gosocket.TextMessage,
+		Message{
+			Type: "welcome",
+			Data: "Welcome to Game Lobby!",
+			Time: time.Now(),
+		},
+		gosocket.JSON,
+	))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func onDisconnect(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+	client, exists := ctx.Client()
+	if !exists {
+		return nil
+	}
+
 	mu.Lock()
-	delete(players, client.ID)
+	delete(players, client.GetID())
 
 	// Remove from any games
 	for gameID, playerIDs := range games {
 		for i, id := range playerIDs {
-			if id == client.ID {
+			if id == client.GetID() {
 				games[gameID] = append(playerIDs[:i], playerIDs[i+1:]...)
 				if len(games[gameID]) == 0 {
 					delete(games, gameID)
@@ -76,104 +100,166 @@ func onDisconnect(client *gosocket.Client, ctx *gosocket.Context) error {
 	}
 	mu.Unlock()
 
-	broadcastLobbyState(ctx)
+	broadcastLobbyState(d, ctx)
 	return nil
 }
 
-func onMessage(client *gosocket.Client, data interface{}, ctx *gosocket.Context) error {
+func onMessage(data interface{}, d gosocket.Dispatcher, ctx *gosocket.Context) error {
 	jsonBytes, _ := json.Marshal(data)
 	var msg Message
 	json.Unmarshal(jsonBytes, &msg)
 
 	switch msg.Type {
 	case "set_name":
-		return handleSetName(client, msg.Data.(string), ctx)
+		return handleSetName(msg.Data.(string), d, ctx)
 	case "create_game":
-		return handleCreateGame(client, ctx)
+		return handleCreateGame(d, ctx)
 	case "join_game":
-		return handleJoinGame(client, msg.Data.(string), ctx)
+		return handleJoinGame(msg.Data.(string), d, ctx)
 	case "leave_game":
-		return handleLeaveGame(client, ctx)
+		return handleLeaveGame(d, ctx)
 	}
 
 	return nil
 }
 
-func handleSetName(client *gosocket.Client, name string, ctx *gosocket.Context) error {
+func handleSetName(name string, d gosocket.Dispatcher, ctx *gosocket.Context) error {
+	client, exists := ctx.Client()
+	if !exists {
+		return nil
+	}
+
 	mu.Lock()
-	players[client.ID] = name
+	players[client.GetID()] = name
 	mu.Unlock()
 
-	broadcastLobbyState(ctx)
-	return client.SendJSON(Message{
-		Type:   "name_set",
-		Player: name,
-		Time:   time.Now(),
-	})
+	err := d.SendToClient(client.GetID(), gosocket.NewMessageWithEncoding(
+		gosocket.TextMessage,
+		Message{
+			Type: "name_set",
+			Data: name,
+			Time: time.Now(),
+		},
+		gosocket.JSON,
+	))
+	if err != nil {
+		return err
+	}
+
+	broadcastLobbyState(d, ctx)
+	return nil
 }
 
-func handleCreateGame(client *gosocket.Client, ctx *gosocket.Context) error {
+func handleCreateGame(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+	client, exists := ctx.Client()
+	if !exists {
+		return nil
+	}
+
 	mu.Lock()
 	gameID := fmt.Sprintf("game_%d", time.Now().Unix())
-	games[gameID] = []string{client.ID}
+	games[gameID] = []string{client.GetID()}
 	mu.Unlock()
 
-	client.JoinRoom(gameID)
-	broadcastLobbyState(ctx)
+	_, err := ctx.CreateRoom(client.GetID(), gameID)
+	if err != nil {
+		return err
+	}
 
-	return client.SendJSON(Message{
-		Type: "game_created",
-		Data: gameID,
-		Time: time.Now(),
-	})
-}
+	err = ctx.JoinRoom(client.GetID(), gameID)
+	if err != nil {
+		return err
+	}
 
-func handleJoinGame(client *gosocket.Client, gameID string, ctx *gosocket.Context) error {
-	mu.Lock()
-	if playerIDs, exists := games[gameID]; exists && len(playerIDs) < 4 {
-		games[gameID] = append(playerIDs, client.ID)
-		mu.Unlock()
-
-		client.JoinRoom(gameID)
-		broadcastLobbyState(ctx)
-		broadcastGameState(gameID, ctx)
-
-		return client.SendJSON(Message{
-			Type: "game_joined",
+	err = d.SendToClient(client.GetID(), gosocket.NewMessageWithEncoding(
+		gosocket.TextMessage,
+		Message{
+			Type: "game_created",
 			Data: gameID,
 			Time: time.Now(),
-		})
+		},
+		gosocket.JSON,
+	))
+	if err != nil {
+		return err
+	}
+
+	broadcastLobbyState(d, ctx)
+	return nil
+}
+
+func handleJoinGame(gameID string, d gosocket.Dispatcher, ctx *gosocket.Context) error {
+	client, exists := ctx.Client()
+	if !exists {
+		return nil
+	}
+
+	mu.Lock()
+	if playerIDs, exists := games[gameID]; exists && len(playerIDs) < 4 {
+		err := ctx.JoinRoom(client.GetID(), gameID)
+		if err != nil {
+			mu.Unlock()
+			return err
+		}
+
+		games[gameID] = append(playerIDs, client.GetID())
+		mu.Unlock()
+
+		err = d.SendToClient(client.GetID(), gosocket.NewMessageWithEncoding(
+			gosocket.TextMessage,
+			Message{
+				Type: "game_joined",
+				Data: gameID,
+				Time: time.Now(),
+			},
+			gosocket.JSON,
+		))
+		if err != nil {
+			return err
+		}
+
+		broadcastLobbyState(d, ctx)
+		broadcastGameState(gameID, d, ctx)
+		return nil
 	}
 	mu.Unlock()
 
-	return client.SendJSON(Message{
-		Type: "error",
-		Data: "Cannot join game",
-		Time: time.Now(),
-	})
+	return d.SendToClient(client.GetID(), gosocket.NewMessageWithEncoding(gosocket.TextMessage,
+		Message{
+			Type: "error",
+			Data: "Cannot join game",
+			Time: time.Now(),
+		},
+		gosocket.JSON,
+	))
 }
 
-func handleLeaveGame(client *gosocket.Client, ctx *gosocket.Context) error {
+func handleLeaveGame(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+	client, exists := ctx.Client()
+	if !exists {
+		return nil
+	}
+
 	mu.Lock()
 	for gameID, playerIDs := range games {
 		for i, id := range playerIDs {
-			if id == client.ID {
+			if id == client.GetID() {
 				games[gameID] = append(playerIDs[:i], playerIDs[i+1:]...)
 				if len(games[gameID]) == 0 {
 					delete(games, gameID)
 				}
-				client.LeaveRoom(gameID)
+				ctx.LeaveRoom(client.GetID(), gameID)
 				break
 			}
 		}
 	}
 	mu.Unlock()
 
-	broadcastLobbyState(ctx)
+	broadcastLobbyState(d, ctx)
 	return nil
 }
 
-func broadcastLobbyState(ctx *gosocket.Context) {
+func broadcastLobbyState(d gosocket.Dispatcher, ctx *gosocket.Context) {
 	mu.RLock()
 
 	gameList := make([]map[string]interface{}, 0)
@@ -195,7 +281,7 @@ func broadcastLobbyState(ctx *gosocket.Context) {
 	}
 	mu.RUnlock()
 
-	message := gosocket.NewMessage(gosocket.TextMessage, Message{
+	msg := gosocket.NewMessage(gosocket.TextMessage, Message{
 		Type: "lobby_update",
 		Data: map[string]interface{}{
 			"players": playerList,
@@ -203,11 +289,11 @@ func broadcastLobbyState(ctx *gosocket.Context) {
 		},
 		Time: time.Now(),
 	})
-	message.Encoding = gosocket.JSON
-	ctx.Hub().BroadcastToRoom("lobby", message)
+	msg.Encoding = gosocket.JSON
+	d.BroadcastToRoom("lobby", msg)
 }
 
-func broadcastGameState(gameID string, ctx *gosocket.Context) {
+func broadcastGameState(gameID string, d gosocket.Dispatcher, ctx *gosocket.Context) {
 	mu.RLock()
 	playerIDs := games[gameID]
 	gameNames := make([]string, len(playerIDs))
@@ -216,7 +302,7 @@ func broadcastGameState(gameID string, ctx *gosocket.Context) {
 	}
 	mu.RUnlock()
 
-	message := gosocket.NewMessage(gosocket.TextMessage, Message{
+	msg := gosocket.NewMessage(gosocket.TextMessage, Message{
 		Type: "game_update",
 		Data: map[string]interface{}{
 			"game_id": gameID,
@@ -224,8 +310,8 @@ func broadcastGameState(gameID string, ctx *gosocket.Context) {
 		},
 		Time: time.Now(),
 	})
-	message.Encoding = gosocket.JSON
-	ctx.Hub().BroadcastToRoom(gameID, message)
+	msg.Encoding = gosocket.JSON
+	d.BroadcastToRoom(gameID, msg)
 }
 
 func servePage(w http.ResponseWriter, r *http.Request) {

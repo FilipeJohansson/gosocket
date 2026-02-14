@@ -12,8 +12,18 @@ import (
 func main() {
 	// Create GoSocket handler
 	ws, err := gosocket.NewHandler(
-		gosocket.OnConnect(func(c *gosocket.Client, ctx *gosocket.Context) error {
-			return c.SendJSON(map[string]string{"status": "connected"})
+		gosocket.WithLogger(gosocket.DefaultLoggerConfig()),
+		gosocket.OnConnect(func(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+
+			return d.SendToClient(client.GetID(), gosocket.NewMessageWithEncoding(
+				gosocket.TextMessage,
+				map[string]string{"status": "connected"},
+				gosocket.JSON,
+			))
 		}),
 	)
 
@@ -35,7 +45,7 @@ func main() {
 		}
 
 		// Broadcast to all WebSocket clients
-		ws.Hub().BroadcastMessage(gosocket.NewMessage(
+		ws.Dispatcher().Broadcast(gosocket.NewMessage(
 			gosocket.TextMessage, data,
 		))
 
@@ -44,7 +54,7 @@ func main() {
 
 	// Get connected clients count
 	r.GET("/api/clients", func(c *gin.Context) {
-		clients := ws.Hub().GetClients()
+		clients := ws.GetClients()
 		c.JSON(http.StatusOK, gin.H{"count": len(clients)})
 	})
 

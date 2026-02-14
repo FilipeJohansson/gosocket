@@ -63,7 +63,7 @@ jobs:
           args: ./...
 
       - name: Run tests with race detection
-        run: go test -v -race -coverprofile=coverage.txt ./...
+        run: make test-race-verbose COVERAGE_FILE=coverage.txt
 
       - name: Generate coverage report
         if: ${{ ! env.ACT }}
