@@ -15,11 +15,16 @@ func main() {
 	ws, err := gosocket.NewServer(
 		gosocket.WithPort(8080),
 		gosocket.WithPath("/ws"),
-		gosocket.WithMaxConnections(100),
+		gosocket.WithMaxConnections(gosocket.ConnectionPoolConfig{MaxTotal: 100, MaxPerIP: 10}),
 		gosocket.WithAuth(AuthMiddleware),
 		gosocket.WithMiddleware(LoggingMiddleware),
-		gosocket.OnConnect(func(c *gosocket.Client, ctx *gosocket.Context) error {
-			fmt.Printf("Client connected: %s\n", c.ID)
+		gosocket.OnConnect(func(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+			fmt.Printf("Client connected: %s\n", client.GetID())
+			fmt.Printf("Client data: %v\n", client.GetUserData())
 			return nil
 		}),
 	)

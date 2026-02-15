@@ -1,0 +1,5 @@
+docker-compose.yml export-ignore
+.github/ export-ignore
+.vscode/ export-ignore
+coverage.out export-ignore
+coverage.html export-ignore

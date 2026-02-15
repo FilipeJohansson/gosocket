@@ -9,11 +9,11 @@ import (
 )
 
 var levels = map[gosocket.LogType]gosocket.LogLevel{
+	gosocket.LogTypeServer:     gosocket.LogLevelInfo,
+	gosocket.LogTypeClient:     gosocket.LogLevelDebug,
 	gosocket.LogTypeConnection: gosocket.LogLevelInfo,
 	gosocket.LogTypeMessage:    gosocket.LogLevelDebug,
 	gosocket.LogTypeError:      gosocket.LogLevelError,
-	gosocket.LogTypeServer:     gosocket.LogLevelInfo,
-	gosocket.LogTypeClient:     gosocket.LogLevelDebug,
 }
 
 func main() {
@@ -21,14 +21,18 @@ func main() {
 		gosocket.WithPort(8080),
 		gosocket.WithPath("/ws"),
 		gosocket.WithLogger(&gosocket.DefaultLogger{}, levels),
-		gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
+		gosocket.OnConnect(func(d gosocket.Dispatcher, ctx *gosocket.Context) error {
 			return nil
 		}),
-		gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.Context) error {
-			client.Send(message.RawData)
+		gosocket.OnMessage(func(message *gosocket.Message, d gosocket.Dispatcher, ctx *gosocket.Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+			d.SendToClient(client.GetID(), message)
 			return nil
 		}),
-		gosocket.OnDisconnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
+		gosocket.OnDisconnect(func(d gosocket.Dispatcher, ctx *gosocket.Context) error {
 			return nil
 		}),
 	)

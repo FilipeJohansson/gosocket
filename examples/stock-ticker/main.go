@@ -24,12 +24,20 @@ func main() {
 		gosocket.WithPort(8081),
 		gosocket.WithPath("/ws"),
 		gosocket.WithJSONSerializer(),
-		gosocket.OnConnect(func(c *gosocket.Client, hc *gosocket.Context) error {
-			fmt.Printf("Client connected: %s\n", c.ID)
+		gosocket.OnConnect(func(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+			fmt.Printf("Client connected: %s\n", client.GetID())
 			return nil
 		}),
-		gosocket.OnDisconnect(func(c *gosocket.Client, hc *gosocket.Context) error {
-			fmt.Printf("Client disconnected: %s\n", c.ID)
+		gosocket.OnDisconnect(func(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+			fmt.Printf("Client disconnected: %s\n", client.GetID())
 			return nil
 		}),
 	)
@@ -67,7 +75,12 @@ func main() {
 						"change": change,
 					},
 				}
-				ws.BroadcastJSON(update)
+				err := ws.Dispatcher().Broadcast(gosocket.NewMessageWithEncoding(
+					gosocket.TextMessage, update, gosocket.JSON,
+				))
+				if err != nil {
+					log.Println("Failed to broadcast message:", err)
+				}
 			}
 			time.Sleep(2 * time.Second)
 		}

@@ -11,18 +11,30 @@ import (
 
 func main() {
 	ws, err := gosocket.NewHandler(
-		gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
-			fmt.Printf("Client connected: %s\n", client.ID)
+		gosocket.OnConnect(func(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+			fmt.Printf("Client connected: %s\n", client.GetID())
 			return nil
 		}),
-		gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.Context) error {
+		gosocket.OnMessage(func(message *gosocket.Message, d gosocket.Dispatcher, ctx *gosocket.Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
 			fmt.Printf("Received: %s\n", string(message.RawData))
 			// Echo back
-			client.Send(message.RawData)
+			d.SendToClient(client.GetID(), message)
 			return nil
 		}),
-		gosocket.OnDisconnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
-			fmt.Printf("Client disconnected: %s\n", client.ID)
+		gosocket.OnDisconnect(func(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+			client, exists := ctx.Client()
+			if !exists {
+				return nil
+			}
+			fmt.Printf("Client disconnected: %s\n", client.GetID())
 			return nil
 		}),
 	)

@@ -66,8 +66,12 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func handleConnect(client *gosocket.Client, ctx *gosocket.Context) error {
-	fmt.Printf("Client connected: %s\n", client.ID)
+func handleConnect(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+	client, exists := ctx.Client()
+	if !exists {
+		return nil
+	}
+	fmt.Printf("Client connected: %s\n", client.GetID())
 
 	// Send welcome message
 	welcome := ChatMessage{
@@ -76,11 +80,17 @@ func handleConnect(client *gosocket.Client, ctx *gosocket.Context) error {
 		Timestamp: time.Now(),
 	}
 
-	return client.SendJSON(welcome)
+	return d.SendToClient(client.GetID(), gosocket.NewMessageWithEncoding(
+		gosocket.TextMessage, welcome, gosocket.JSON,
+	))
 }
 
-func handleDisconnect(client *gosocket.Client, ctx *gosocket.Context) error {
-	fmt.Printf("Client disconnected: %s\n", client.ID)
+func handleDisconnect(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+	client, exists := ctx.Client()
+	if !exists {
+		return nil
+	}
+	fmt.Printf("Client disconnected: %s\n", client.GetID())
 
 	// Get user data
 	username := getUsernameFromClient(client)
@@ -89,28 +99,28 @@ func handleDisconnect(client *gosocket.Client, ctx *gosocket.Context) error {
 	}
 
 	// Remove user from all rooms and notify
-	rooms := client.GetRooms()
-	for _, room := range rooms {
-		client.LeaveRoom(room)
+	rooms := ctx.GetRooms()
+	for roomName := range rooms {
+		ctx.LeaveRoom(client.GetID(), roomName)
 
 		// Notify room about user leaving
 		leaveMsg := gosocket.NewMessage(gosocket.TextMessage, ChatMessage{
 			Type:      MsgTypeLeave,
 			User:      username,
-			Room:      room,
+			Room:      roomName,
 			Message:   fmt.Sprintf("%s left the room", username),
 			Timestamp: time.Now(),
 		})
 		leaveMsg.Encoding = gosocket.JSON
 
-		ctx.Hub().BroadcastToRoom(room, leaveMsg)
-		broadcastUserList(ctx, room)
+		d.BroadcastToRoom(roomName, leaveMsg)
+		broadcastUserList(d, ctx, roomName)
 	}
 
 	return nil
 }
 
-func handleMessage(client *gosocket.Client, data interface{}, ctx *gosocket.Context) error {
+func handleMessage(data interface{}, d gosocket.Dispatcher, ctx *gosocket.Context) error {
 	// Parse the JSON message
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {
@@ -126,32 +136,37 @@ func handleMessage(client *gosocket.Client, data interface{}, ctx *gosocket.Cont
 
 	switch msg.Type {
 	case MsgTypeJoin:
-		return handleJoinRoom(client, &msg, ctx)
+		return handleJoinRoom(&msg, d, ctx)
 	case MsgTypeLeave:
-		return handleLeaveRoom(client, &msg, ctx)
+		return handleLeaveRoom(&msg, d, ctx)
 	case MsgTypeChat:
-		return handleChatMessage(client, &msg, ctx)
+		return handleChatMessage(&msg, d, ctx)
 	default:
-		return sendErrorMessage(client, "Unknown message type")
+		return sendErrorMessage("Unknown message type", d, ctx)
 	}
 }
 
-func handleJoinRoom(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.Context) error {
+func handleJoinRoom(msg *ChatMessage, d gosocket.Dispatcher, ctx *gosocket.Context) error {
+	client, exists := ctx.Client()
+	if !exists {
+		return nil
+	}
+
 	if msg.Room == "" || msg.User == "" {
-		return sendErrorMessage(client, "Room and username are required")
+		return sendErrorMessage("Room and username are required", d, ctx)
 	}
 
 	// Validate room name (no spaces, special chars)
 	if strings.ContainsAny(msg.Room, " \t\n\r") {
-		return sendErrorMessage(client, "Room name cannot contain spaces")
+		return sendErrorMessage("Room name cannot contain spaces", d, ctx)
 	}
 
 	// Store username in client data
 	client.SetUserData("username", msg.User)
 
 	// Join the room
-	if err := client.JoinRoom(msg.Room); err != nil {
-		return sendErrorMessage(client, "Failed to join room: "+err.Error())
+	if err := ctx.JoinRoom(client.GetID(), msg.Room); err != nil {
+		return sendErrorMessage("Failed to join room: "+err.Error(), d, ctx)
 	}
 
 	// Confirm join to user
@@ -162,7 +177,9 @@ func handleJoinRoom(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.Con
 		Message:   fmt.Sprintf("You joined room: %s", msg.Room),
 		Timestamp: time.Now(),
 	}
-	client.SendJSON(joinConfirm)
+	d.SendToClient(client.GetID(), gosocket.NewMessageWithEncoding(
+		gosocket.TextMessage, joinConfirm, gosocket.JSON,
+	))
 
 	// Notify room about new user
 	joinNotify := gosocket.NewMessage(gosocket.TextMessage, ChatMessage{
@@ -175,25 +192,30 @@ func handleJoinRoom(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.Con
 	joinNotify.Encoding = gosocket.JSON
 
 	// Broadcast to room
-	ctx.Hub().BroadcastToRoom(msg.Room, joinNotify)
-	broadcastUserList(ctx, msg.Room)
+	d.BroadcastToRoom(msg.Room, joinNotify)
+	broadcastUserList(d, ctx, msg.Room)
 
 	return nil
 }
 
-func handleLeaveRoom(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.Context) error {
+func handleLeaveRoom(msg *ChatMessage, d gosocket.Dispatcher, ctx *gosocket.Context) error {
+	client, exists := ctx.Client()
+	if !exists {
+		return nil
+	}
+
 	username := getUsernameFromClient(client)
 	if username == "" {
-		return sendErrorMessage(client, "You must set a username first")
+		return sendErrorMessage("You must set a username first", d, ctx)
 	}
 
 	if msg.Room == "" {
-		return sendErrorMessage(client, "Room name is required")
+		return sendErrorMessage("Room name is required", d, ctx)
 	}
 
 	// Leave the room
-	if err := client.LeaveRoom(msg.Room); err != nil {
-		return sendErrorMessage(client, "Failed to leave room: "+err.Error())
+	if err := ctx.LeaveRoom(client.GetID(), msg.Room); err != nil {
+		return sendErrorMessage("Failed to leave room: "+err.Error(), d, ctx)
 	}
 
 	// Confirm leave to user
@@ -204,7 +226,9 @@ func handleLeaveRoom(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.Co
 		Message:   fmt.Sprintf("You left room: %s", msg.Room),
 		Timestamp: time.Now(),
 	}
-	client.SendJSON(leaveConfirm)
+	d.SendToClient(client.GetID(), gosocket.NewMessageWithEncoding(
+		gosocket.TextMessage, leaveConfirm, gosocket.JSON,
+	))
 
 	// Notify room about user leaving
 	leaveNotify := gosocket.NewMessage(gosocket.TextMessage, ChatMessage{
@@ -217,34 +241,37 @@ func handleLeaveRoom(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.Co
 	leaveNotify.Encoding = gosocket.JSON
 
 	// Broadcast to room
-	ctx.Hub().BroadcastToRoom(msg.Room, leaveNotify)
-	broadcastUserList(ctx, msg.Room)
+	d.BroadcastToRoom(msg.Room, leaveNotify)
+	broadcastUserList(d, ctx, msg.Room)
 
 	return nil
 }
 
-func handleChatMessage(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.Context) error {
+func handleChatMessage(msg *ChatMessage, d gosocket.Dispatcher, ctx *gosocket.Context) error {
+	client, exists := ctx.Client()
+	if !exists {
+		return nil
+	}
+
 	username := getUsernameFromClient(client)
 	if username == "" {
-		return sendErrorMessage(client, "You must join a room first")
+		return sendErrorMessage("You must join a room first", d, ctx)
 	}
 
 	if msg.Room == "" || msg.Message == "" {
-		return sendErrorMessage(client, "Room and message are required")
+		return sendErrorMessage("Room and message are required", d, ctx)
 	}
 
 	// Check if user is in the room
-	rooms := client.GetRooms()
+	rooms := ctx.GetRooms()
 	inRoom := false
-	for _, room := range rooms {
-		if room == msg.Room {
-			inRoom = true
-			break
-		}
+	if _, exists := rooms[msg.Room]; exists {
+		clients := ctx.GetClientsInRoom(msg.Room)
+		_, inRoom = clients[client.GetID()]
 	}
 
 	if !inRoom {
-		return sendErrorMessage(client, "You are not in room: "+msg.Room)
+		return sendErrorMessage("You are not in room: "+msg.Room, d, ctx)
 	}
 
 	// Create chat message
@@ -258,17 +285,17 @@ func handleChatMessage(client *gosocket.Client, msg *ChatMessage, ctx *gosocket.
 	chatMsg.Encoding = gosocket.JSON
 
 	// Broadcast to room
-	ctx.Hub().BroadcastToRoom(msg.Room, chatMsg)
+	d.BroadcastToRoom(msg.Room, chatMsg)
 
 	return nil
 }
 
-func broadcastUserList(ctx *gosocket.Context, room string) {
-	clients := ctx.Hub().GetClientsInRoom(room)
+func broadcastUserList(d gosocket.Dispatcher, ctx *gosocket.Context, room string) {
+	clients := ctx.GetClientsInRoom(room)
 	var users []string
 
 	for _, client := range clients {
-		if username := getUsernameFromClient(client); username != "" {
+		if username := getUsernameFromClientDTO(client); username != "" {
 			users = append(users, username)
 		}
 	}
@@ -281,20 +308,39 @@ func broadcastUserList(ctx *gosocket.Context, room string) {
 	})
 	userListMsg.Encoding = gosocket.JSON
 
-	ctx.Hub().BroadcastToRoom(room, userListMsg)
+	d.BroadcastToRoom(room, userListMsg)
 }
 
-func sendErrorMessage(client *gosocket.Client, message string) error {
+func sendErrorMessage(msg string, d gosocket.Dispatcher, ctx *gosocket.Context) error {
+	client, exists := ctx.Client()
+	if !exists {
+		return nil
+	}
+
 	errMsg := ChatMessage{
 		Type:      MsgTypeError,
-		Message:   message,
+		Message:   msg,
 		Timestamp: time.Now(),
 	}
-	return client.SendJSON(errMsg)
+	return d.SendToClient(client.GetID(), gosocket.NewMessageWithEncoding(
+		gosocket.TextMessage, errMsg, gosocket.JSON,
+	))
 }
 
 func getUsernameFromClient(client *gosocket.Client) string {
-	if username := client.GetUserData("username"); username != nil {
+	if username := client.GetUserDataByKey("username"); username != nil {
+		if str, ok := username.(string); ok {
+			return str
+		}
+	}
+	return ""
+}
+
+func getUsernameFromClientDTO(client gosocket.ClientDTO) string {
+	if client.UserData == nil {
+		return ""
+	}
+	if username, ok := client.UserData["username"]; ok {
 		if str, ok := username.(string); ok {
 			return str
 		}
@@ -322,9 +368,9 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
         .messages { flex: 1; padding: 10px; overflow-y: auto; border-bottom: 1px solid #eee; }
         .input-area { padding: 10px; display: flex; gap: 10px; }
         .message { margin: 5px 0; padding: 5px; }
-        .message.chat { background: #f0f8ff; }
-        .message.notification { background: #fff8dc; font-style: italic; }
-        .message.error { background: #ffe4e1; color: red; }
+        .gosocket.chat { background: #f0f8ff; }
+        .gosocket.notification { background: #fff8dc; font-style: italic; }
+        .gosocket.error { background: #ffe4e1; color: red; }
         .user-list { list-style: none; padding: 0; }
         .user-list li { padding: 5px; border-bottom: 1px solid #eee; }
         input[type="text"] { flex: 1; padding: 8px; }
@@ -359,7 +405,7 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
             <div class="main-chat">
                 <div class="messages" id="messages"></div>
                 <div class="input-area">
-                    <input type="text" id="messageInput" placeholder="Type your message..." 
+                    <input type="text" id="messageInput" placeholder="Type your gosocket..." 
                            onkeypress="if(event.key==='Enter') sendMessage()" />
                     <button onclick="sendMessage()">Send</button>
                 </div>
