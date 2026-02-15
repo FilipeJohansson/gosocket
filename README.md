@@ -10,8 +10,12 @@ Stop writing WebSocket boilerplate. Start building features.
 // That's it. You have a working WebSocket server.
 ws, _ := gosocket.NewServer(
     gosocket.WithPort(8080),
-    gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.Context) error {
-        client.Send(message.RawData) // Echo back
+    gosocket.OnMessage(func(m *gosocket.Message, d gosocket.Dispatcher, ctx *gosocket.Context) error {
+        client, _ := ctx.Client()
+        // Echo back
+        d.SendToClient(client.GetID(), gosocket.NewRawMessage(
+            gosocket.TextMessage, m.RawData,
+        ))
         return nil
     }),
 )
@@ -54,17 +58,21 @@ func main() {
     ws, err := gosocket.NewServer(
         gosocket.WithPort(8080),
         gosocket.WithPath("/ws"),
-        gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
-            fmt.Printf("Client %s connected\n", client.ID)
+        gosocket.OnConnect(func(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+            client, _ := ctx.Client()
+            fmt.Printf("Client %s connected\n", client.GetID())
             return nil
         }),
-        gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.Context) error {
+        gosocket.OnMessage(func(m *gosocket.Message, d gosocket.Dispatcher, ctx *gosocket.Context) error {
             // Broadcast to all clients
-            ctx.Hub().BroadcastMessage(gosocket.NewRawMessage(gosocket.TextMessage, message.RawData))
+            d.Broadcast(gosocket.NewMessage(
+                gosocket.TextMessage, m.RawData,
+            ))
             return nil
         }),
         gosocket.OnDisconnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
-            fmt.Printf("Client %s disconnected\n", client.ID)
+            client, _ := ctx.Client()
+            fmt.Printf("Client %s disconnected\n", client.GetID())
             return nil
         }),
     )
@@ -94,8 +102,11 @@ func main() {
     
     // Add WebSocket endpoint
     ws, err := gosocket.NewHandler(
-        gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.Context) error {
-            client.Send(message.RawData)
+        gosocket.OnMessage(func(m *gosocket.Message, d gosocket.Dispatcher, ctx *gosocket.Context) error {
+            client, _ := ctx.Client()
+            d.SendToClient(client.GetID(), gosocket.NewRawMessage(
+				gosocket.TextMessage, m.RawData,
+			))
             return nil
         }),
     )
@@ -118,8 +129,9 @@ ws, _ := gosocket.NewServer(
     gosocket.WithPort(8080),
     gosocket.WithAuth(AuthMiddleware),
     gosocket.WithMiddleware(LoggingMiddleware),
-    gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
-        fmt.Printf("Authenticated client connected: %s\n", client.ID)
+    gosocket.OnConnect(func(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+        client, _ := ctx.Client()
+        fmt.Printf("Authenticated client connected: %s\n", client.GetID())
         return nil
     }),
 )
@@ -128,20 +140,26 @@ ws, _ := gosocket.NewServer(
 ## Rooms & Broadcasting
 
 ```go
-gosocket.OnConnect(func(client *gosocket.Client, ctx *gosocket.Context) error {
-    client.JoinRoom("general")
+gosocket.OnConnect(func(d gosocket.Dispatcher, ctx *gosocket.Context) error {
+    client, _ := ctx.Client()
+    ctx.JoinRoom(client.GetID(), "general")
     return nil
 })
 
-gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx *gosocket.Context) error {
+gosocket.OnMessage(func(m *gosocket.Message, d gosocket.Dispatcher, ctx *gosocket.Context) error {
     // Send to specific room
-    ctx.Hub().BroadcastToRoom("general", gosocket.NewRawMessage(gosocket.TextMessage, message.RawData))
+    d.BroadcastToRoom("general", gosocket.NewRawMessage(
+        gosocket.TextMessage, message.RawData,
+    ))
     
     // Send to specific client
-    client.Send([]byte("ACK"))
+    client, _ := ctx.Client()
+    d.SendToClient(client.GetID(), gosocket.NewRawMessage(
+        gosocket.TextMessage, []byte("ACK"),
+    ))
     
     // Send to everyone
-    ctx.Hub().BroadcastMessage(gosocket.NewRawMessage(gosocket.TextMessage, []byte("Global announcement")))
+    d.Broadcast(gosocket.NewRawMessage(gosocket.TextMessage, []byte("Global announcement")))
     
     return nil
 })
@@ -155,6 +173,7 @@ gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx 
 - **[Stock Ticker](examples/stock-ticker)** - Live data streaming
 - **[Middleware Example](examples/server/with-middlewares)** - Authentication and logging middleware
 - **[Gin Integration](examples/gin-integration)** - Add WebSockets to Gin apps
+- **[Cluster Example](examples/cluster)** - Configure clusters to send/receive messages from other nodes
 
 ## Features
 
@@ -162,7 +181,7 @@ gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx 
 - **Built-in Rooms** - Join/leave rooms without manual management  
 - **Broadcasting** - Send to all clients, rooms, or individuals
 - **Flexible Integration** - Standalone server or HTTP handler
-- **Multiple Encodings** - JSON ready, Protobuf & MessagePack coming
+- **Clustering Ready** - Send/receive messages from other nodes
 
 ## Roadmap to v1.0.0
 
@@ -171,8 +190,7 @@ gosocket.OnMessage(func(client *gosocket.Client, message *gosocket.Message, ctx 
 | ✅ Completed | WebSocket server + middleware |
 | ✅ Completed | Rooms and broadcasting |
 | 🔄 In Progress | Rate limiting, logging and other improvements |
-| ⚪ Planned | Protobuf & MessagePack support |
-| ⚪ Planned | Clustering & high availability |
+| 🔄 In Progress | Clustering & high availability |
 | ⚪ Planned | Monitoring & metrics |
 | ⚪ Planned | Performance benchmarks |
 
