@@ -285,13 +285,6 @@ func TestServer_WithEncoding(t *testing.T) {
 				assert.Equal(t, Raw, s.Handler().Config.DefaultEncoding)
 			},
 		},
-		{
-			name:     "sets Protobuf encoding",
-			encoding: message.Protobuf,
-			expected: func(s *websocket.Server) {
-				assert.Equal(t, message.Protobuf, s.Handler().Config.DefaultEncoding)
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -318,16 +311,6 @@ func TestServer_WithSerializer(t *testing.T) {
 				ser, exists := s.Handler().Config.Serializers[JSON]
 				assert.True(t, exists)
 				assert.IsType(t, &message.JSONSerializer{}, ser)
-			},
-		},
-		{
-			name:       "sets Protobuf serializer",
-			encoding:   message.Protobuf,
-			serializer: message.CreateSerializer(message.Protobuf, DefaultSerializerConfig()),
-			expected: func(s *websocket.Server) {
-				ser, exists := s.Handler().Config.Serializers[message.Protobuf]
-				assert.True(t, exists)
-				assert.IsType(t, &message.ProtobufSerializer{}, ser)
 			},
 		},
 		{
@@ -854,15 +837,6 @@ func TestServer_WithSSL(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestServer_WithProtobufSerializer(t *testing.T) {
-	server, err := NewServer(WithProtobufSerializer())
-	server = mustServer(t, server, err)
-
-	ser, exists := server.Handler().Config.Serializers[message.Protobuf]
-	assert.True(t, exists)
-	assert.IsType(t, &message.ProtobufSerializer{}, ser)
 }
 
 func TestServer_WithDebugLogger(t *testing.T) {

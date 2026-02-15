@@ -59,10 +59,9 @@ type OnStartFunc func(ctx *Context) error
 type OnBeforeConnectFunc func(r *http.Request, ctx *Context) error
 type OnConnectFunc func(d dispatcher.Dispatcher, ctx *Context) error
 type OnDisconnectFunc func(d dispatcher.Dispatcher, ctx *Context) error
-type OnMessageFunc func(m *message.Message, d dispatcher.Dispatcher, ctx *Context) error    // generic handler
-type OnRawMessageFunc func(m []byte, d dispatcher.Dispatcher, ctx *Context) error           // raw data handler
-type OnJSONMessageFunc func(m interface{}, d dispatcher.Dispatcher, ctx *Context) error     // JSON specific handler
-type OnProtobufMessageFunc func(m interface{}, d dispatcher.Dispatcher, ctx *Context) error // Protobuf specific handler
+type OnMessageFunc func(m *message.Message, d dispatcher.Dispatcher, ctx *Context) error // generic handler
+type OnRawMessageFunc func(m []byte, d dispatcher.Dispatcher, ctx *Context) error        // raw data handler
+type OnJSONMessageFunc func(m interface{}, d dispatcher.Dispatcher, ctx *Context) error  // JSON specific handler
 // OnErrorFunc is called when an error occurs during any event.
 // The context will only have a client after the handshake is complete.
 type OnErrorFunc func(err error, d dispatcher.Dispatcher, ctx *Context) error
@@ -70,17 +69,16 @@ type OnPingFunc func(d dispatcher.Dispatcher, ctx *Context) error
 type OnPongFunc func(d dispatcher.Dispatcher, ctx *Context) error
 
 type Events struct {
-	OnStart           OnStartFunc
-	OnBeforeConnect   OnBeforeConnectFunc
-	OnConnect         OnConnectFunc
-	OnDisconnect      OnDisconnectFunc
-	OnMessage         OnMessageFunc
-	OnRawMessage      OnRawMessageFunc
-	OnJSONMessage     OnJSONMessageFunc
-	OnProtobufMessage OnProtobufMessageFunc
-	OnError           OnErrorFunc
-	OnPing            OnPingFunc
-	OnPong            OnPongFunc
+	OnStart         OnStartFunc
+	OnBeforeConnect OnBeforeConnectFunc
+	OnConnect       OnConnectFunc
+	OnDisconnect    OnDisconnectFunc
+	OnMessage       OnMessageFunc
+	OnRawMessage    OnRawMessageFunc
+	OnJSONMessage   OnJSONMessageFunc
+	OnError         OnErrorFunc
+	OnPing          OnPingFunc
+	OnPong          OnPongFunc
 }
 
 type Handler struct {
@@ -660,43 +658,6 @@ func (h *Handler) processMessage(msg *message.Message, ctx *Context) {
 	// 					ctx,
 	// 				)
 	// 			}
-	// 		}
-	// 	}
-
-	// case message.Protobuf:
-	// 	if h.Events.OnProtobufMessage == nil {
-	// 		return
-	// 	}
-
-	// 	serializer := h.Config.Serializers[message.Protobuf]
-	// 	if serializer == nil {
-	// 		err := errors.ErrSerializerNotFound
-	// 		h.stats.IncrementErrors(err)
-	// 		if h.Events.OnError != nil {
-	// 			_ = h.Events.OnError(err, h.dispatcher, ctx)
-	// 		}
-	// 		return
-	// 	}
-
-	// 	var data interface{}
-	// 	if err := serializer.Unmarshal(msg.RawData, &data); err != nil {
-	// 		h.stats.IncrementErrors(err)
-	// 		if h.Events.OnError != nil {
-	// 			_ = h.Events.OnError(err, h.dispatcher, ctx)
-	// 		}
-	// 		return
-	// 	}
-
-	// 	msg.Data = data
-
-	// 	if err := h.Events.OnProtobufMessage(data, h.dispatcher, ctx); err != nil {
-	// 		h.stats.IncrementErrors(err)
-	// 		if h.Events.OnError != nil {
-	// 			_ = h.Events.OnError(
-	// 				errors.NewEventFailedError("OnProtobufMessage", err),
-	// 				h.dispatcher,
-	// 				ctx,
-	// 			)
 	// 		}
 	// 	}
 

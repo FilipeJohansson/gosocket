@@ -256,14 +256,6 @@ func (c *ClientHandler) writeLoop(handlerCtx *Context) {
 
 func (c *ClientHandler) serializeMessageWithEncoding(msg *message.Message) ([]byte, error) {
 	switch msg.Encoding {
-	case message.Protobuf:
-		if serializer := c.handler.Config.Serializers[message.Protobuf]; serializer != nil {
-			if protoData, err := serializer.Marshal(msg.Data); err == nil {
-				return protoData, nil
-			} else {
-				return nil, errors.NewSerializeError(err)
-			}
-		}
 	case message.Raw:
 		if rawData, ok := msg.Data.([]byte); ok {
 			return rawData, nil
@@ -283,8 +275,6 @@ func (c *ClientHandler) serializeMessageWithEncoding(msg *message.Message) ([]by
 			return nil, errors.NewSerializeError(err)
 		}
 	}
-
-	return nil, errors.ErrSerializeData
 }
 
 func (c *ClientHandler) fireError(err error) {

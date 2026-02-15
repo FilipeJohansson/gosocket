@@ -102,11 +102,10 @@ func TestEventOptions_SetHandlers(t *testing.T) {
 			},
 		},
 		{
-			name: "raw_json_protobuf_ping_pong_error",
+			name: "raw_json_ping_pong_error",
 			run: func(t *testing.T) {
 				onRaw := false
 				onJSON := false
-				onProto := false
 				onPing := false
 				onPong := false
 				onErr := false
@@ -117,10 +116,6 @@ func TestEventOptions_SetHandlers(t *testing.T) {
 					}),
 					OnJSONMessage(func(m interface{}, d Dispatcher, ctx *Context) error {
 						onJSON = true
-						return nil
-					}),
-					OnProtobufMessage(func(m interface{}, d Dispatcher, ctx *Context) error {
-						onProto = true
 						return nil
 					}),
 					OnPing(func(d Dispatcher, ctx *Context) error {
@@ -139,13 +134,11 @@ func TestEventOptions_SetHandlers(t *testing.T) {
 				require.NoError(t, err)
 				assert.NoError(t, s.Handler().Events.OnRawMessage([]byte("x"), nil, nil))
 				assert.NoError(t, s.Handler().Events.OnJSONMessage(map[string]any{"x": 1}, nil, nil))
-				assert.NoError(t, s.Handler().Events.OnProtobufMessage(struct{}{}, nil, nil))
 				assert.NoError(t, s.Handler().Events.OnPing(nil, nil))
 				assert.NoError(t, s.Handler().Events.OnPong(nil, nil))
 				assert.NoError(t, s.Handler().Events.OnError(errors.New("x"), nil, nil))
 				assert.True(t, onRaw)
 				assert.True(t, onJSON)
-				assert.True(t, onProto)
 				assert.True(t, onPing)
 				assert.True(t, onPong)
 				assert.True(t, onErr)

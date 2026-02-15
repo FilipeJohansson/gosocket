@@ -163,7 +163,7 @@ func WithCheckOrigin(f func(r *http.Request) bool) websocket.UniversalOption {
 // WithEncoding sets the default encoding for a handler. The encoding is used to
 // serialize outgoing messages and deserialize incoming messages. The default
 // encoding is JSON, but you can change it to any of the supported encodings
-// (JSON, Protobuf, Raw). If the encoding is not supported, an error will be
+// (JSON, Raw). If the encoding is not supported, an error will be
 // returned.
 func WithEncoding(encoding message.EncodingType) websocket.UniversalOption {
 	return websocket.UniversalOptionFunc{
@@ -183,7 +183,7 @@ func WithEncoding(encoding message.EncodingType) websocket.UniversalOption {
 //
 // The serializer will be used to serialize outgoing messages and deserialize
 // incoming messages for the specified encoding type. The encoding type must be
-// one of the supported encoding types (JSON, Protobuf, Raw). If the encoding type
+// one of the supported encoding types (JSON, Raw). If the encoding type
 // is not supported, an error will be returned.
 //
 // The serializer will be used for all incoming and outgoing messages with the
@@ -209,14 +209,6 @@ func WithSerializer(encoding message.EncodingType, serializer message.Serializer
 // will be used if no other serializer is specified.
 func WithJSONSerializer() websocket.UniversalOption {
 	return WithSerializer(message.JSON, message.CreateSerializer(message.JSON, DefaultSerializerConfig()))
-}
-
-// WithProtobufSerializer sets the default Protobuf serializer for a handler. The
-// serializer will be used to serialize outgoing messages and deserialize
-// incoming messages for the Protobuf encoding type. The default Protobuf
-// serializer will be used if no other serializer is specified.
-func WithProtobufSerializer() websocket.UniversalOption {
-	return WithSerializer(message.Protobuf, message.CreateSerializer(message.Protobuf, DefaultSerializerConfig()))
 }
 
 // WithRawSerializer sets the default Raw serializer for a handler. The
@@ -265,13 +257,12 @@ func WithMiddleware(middleware websocket.Middleware) websocket.UniversalOption {
 // function does not return an error, the client will be authenticated and
 // connected to the handler. The authentication function can return a value to
 // be associated with the client, which can be accessed later in the
-// OnConnect, OnDisconnect, OnMessage, OnRawMessage, OnJSONMessage, and
-// OnProtobufMessage handlers. The authentication function can also return an
-// error, which will be returned to the client. If the authentication function
-// returns an error, the client will not be connected to the handler. If the
-// authentication function does not return an error, the client will be
-// connected to the handler. The authentication function is called before the
-// OnConnect handler is called.
+// OnConnect, OnDisconnect, OnMessage, OnRawMessage, OnJSONMessage handlers.
+// The authentication function can also return an error, which will be returned
+// to the client. If the authentication function returns an error, the client
+// will not be connected to the handler. If the authentication function does not
+// return an error, the client will be connected to the handler. The authentication
+// function is called before the OnConnect handler is called.
 func WithAuth(authFunc websocket.AuthFunc) websocket.UniversalOption {
 	return websocket.UniversalOptionFunc{
 		ApplyHandlerFn: func(h *websocket.Handler) error {

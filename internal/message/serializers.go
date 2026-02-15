@@ -69,18 +69,13 @@ type EncodingType int
 
 const (
 	JSON EncodingType = iota
-	Protobuf
-	MessagePack
-	CBOR
-	Raw // to raw binary data
+	Raw               // to raw binary data
 )
 
 func CreateSerializer(encoding EncodingType, config SerializationConfig) Serializer {
 	switch encoding {
 	case JSON:
 		return NewJSONSerializer(config)
-	case Protobuf:
-		return NewProtobufSerializer(config)
 	case Raw:
 		return NewRawSerializer(config)
 	default:
@@ -257,55 +252,6 @@ func (j *JSONSerializer) ContentType() string {
 
 func (j *JSONSerializer) EncodingType() EncodingType {
 	return JSON
-}
-
-// ProtobufSerializer default Protobuf implementation
-type ProtobufSerializer struct {
-	BaseSerializer
-}
-
-func NewProtobufSerializer(config SerializationConfig) *ProtobufSerializer {
-	return &ProtobufSerializer{
-		BaseSerializer: NewBaseSerializer(config),
-	}
-}
-
-func (p *ProtobufSerializer) Marshal(v interface{}) ([]byte, error) {
-	if err := p.ValidateType(reflect.TypeOf(v), 0); err != nil {
-		return nil, errors.NewTypeNotAllowedError(err.Error())
-	}
-
-	if err := p.ValidateValue(v, 0); err != nil {
-		return nil, errors.NewInvalidValueError(err.Error())
-	}
-
-	// TODO: implement proto.Marshal with validations
-	return nil, nil
-}
-
-func (p *ProtobufSerializer) Unmarshal(data []byte, v interface{}) error {
-	if len(data) == 0 {
-		return errors.ErrEmptyData
-	}
-
-	if int64(len(data)) > p.Config.MaxBinarySize {
-		return errors.NewDataTooLongError(len(data))
-	}
-
-	if err := p.ValidateType(reflect.TypeOf(v), 0); err != nil {
-		return errors.NewTypeNotAllowedError(err.Error())
-	}
-
-	// TODO: implement proto.Unmarshal with validations
-	return nil
-}
-
-func (p *ProtobufSerializer) ContentType() string {
-	return "application/x-protobuf"
-}
-
-func (p *ProtobufSerializer) EncodingType() EncodingType {
-	return Protobuf
 }
 
 // RawSerializer to raw binary data

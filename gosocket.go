@@ -44,7 +44,6 @@ type OnDisconnectFunc = websocket.OnDisconnectFunc
 type OnMessageFunc = websocket.OnMessageFunc
 type OnRawMessageFunc = websocket.OnRawMessageFunc
 type OnJSONMessageFunc = websocket.OnJSONMessageFunc
-type OnProtobufMessageFunc = websocket.OnProtobufMessageFunc
 type OnErrorFunc = websocket.OnErrorFunc
 type OnPingFunc = websocket.OnPingFunc
 type OnPongFunc = websocket.OnPongFunc
@@ -338,29 +337,6 @@ func OnJSONMessage(handler OnJSONMessageFunc) websocket.UniversalOption {
 				return nil
 			}
 			h.Events.OnJSONMessage = handler
-			return nil
-		},
-	}
-}
-
-// OnProtobufMessage sets a handler for the OnProtobufMessage event. The
-// OnProtobufMessage event is called when a client sends a Protobuf message to
-// the handler. The handler is called with the client that sent the message, the
-// unmarshaled Protobuf data, and a context object as arguments. The context
-// object contains information about the client, such as the client's ID and the
-// request that the client used to connect to the handler. The handler can return
-// an error, which will be returned to the client. If the handler does not return
-// an error, the message will be processed as usual. The OnProtobufMessage
-// handler is called after the OnRawMessage handler is called. The
-// OnProtobufMessage handler can also be used to modify the Protobuf data before
-// it is processed by the handler.
-func OnProtobufMessage(handler OnProtobufMessageFunc) websocket.UniversalOption {
-	return websocket.UniversalOptionFunc{
-		ApplyHandlerFn: func(h *websocket.Handler) error {
-			if h == nil {
-				return nil
-			}
-			h.Events.OnProtobufMessage = handler
 			return nil
 		},
 	}

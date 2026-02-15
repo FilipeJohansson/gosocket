@@ -26,9 +26,7 @@ func TestDefaultSerializerConfig(t *testing.T) {
 func TestCreateSerializer(t *testing.T) {
 	cfg := DefaultSerializerConfig()
 	assert.IsType(t, &JSONSerializer{}, CreateSerializer(JSON, cfg))
-	assert.IsType(t, &ProtobufSerializer{}, CreateSerializer(Protobuf, cfg))
 	assert.IsType(t, &RawSerializer{}, CreateSerializer(Raw, cfg))
-	assert.IsType(t, &JSONSerializer{}, CreateSerializer(CBOR, cfg))
 }
 
 func TestBaseSerializer(t *testing.T) {
@@ -89,47 +87,14 @@ func TestJSONSerializer(t *testing.T) {
 	strictCfg := DefaultSerializerConfig()
 	strictCfg.EnableStrict = true
 	strict := NewJSONSerializer(strictCfg)
-	var typed struct{ Name string `json:"name"` }
+	var typed struct {
+		Name string `json:"name"`
+	}
 	err = strict.Unmarshal([]byte(`{"name":"ok","extra":1}`), &typed)
 	assert.Error(t, err)
 
 	assert.Equal(t, "application/json", jsonSer.ContentType())
 	assert.Equal(t, JSON, jsonSer.EncodingType())
-}
-
-func TestProtobufSerializer(t *testing.T) {
-	cfg := DefaultSerializerConfig()
-	cfg.MaxBinarySize = 4
-	protoSer := NewProtobufSerializer(cfg)
-
-	out, err := protoSer.Marshal(map[string]string{"k": "v"})
-	assert.NoError(t, err)
-	assert.Nil(t, out)
-
-	_, err = protoSer.Marshal(unsupportedStruct{})
-	assert.ErrorIs(t, err, errorspkg.ErrTypeNotAllowed)
-
-	cfgShort := DefaultSerializerConfig()
-	cfgShort.MaxStringLength = 2
-	protoShort := NewProtobufSerializer(cfgShort)
-	_, err = protoShort.Marshal(map[string]string{"k": "long"})
-	assert.ErrorIs(t, err, errorspkg.ErroInvalidValue)
-
-	var dst any
-	err = protoSer.Unmarshal(nil, &dst)
-	assert.ErrorIs(t, err, errorspkg.ErrEmptyData)
-
-	err = protoSer.Unmarshal([]byte("12345"), &dst)
-	assert.ErrorIs(t, err, errorspkg.ErrDataTooLong)
-
-	err = protoSer.Unmarshal([]byte("ok"), &unsupportedStruct{})
-	assert.ErrorIs(t, err, errorspkg.ErrTypeNotAllowed)
-
-	err = protoSer.Unmarshal([]byte("ok"), &dst)
-	assert.NoError(t, err)
-
-	assert.Equal(t, "application/x-protobuf", protoSer.ContentType())
-	assert.Equal(t, Protobuf, protoSer.EncodingType())
 }
 
 func TestRawSerializer(t *testing.T) {
