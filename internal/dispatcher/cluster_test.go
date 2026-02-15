@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/FilipeJohansson/gosocket/internal/cluster"
+	"github.com/FilipeJohansson/gosocket/internal/cluster/store"
 	"github.com/FilipeJohansson/gosocket/internal/hub"
 	"github.com/FilipeJohansson/gosocket/internal/message"
 	"github.com/stretchr/testify/require"
@@ -532,4 +533,268 @@ func TestClusterDispatcher_NormalizationConsistency(t *testing.T) {
 	}
 
 	_ = clusterDispatcher.Stop()
+}
+
+type mockStateStore struct {
+	rooms       []store.RoomInfo
+	locations   map[string]string
+	roomMembers map[string][]store.ClientPresence
+}
+
+func newMockStateStore() *mockStateStore {
+	return &mockStateStore{
+		rooms:       make([]store.RoomInfo, 0),
+		locations:   make(map[string]string),
+		roomMembers: make(map[string][]store.ClientPresence),
+	}
+}
+
+func (m *mockStateStore) UpsertRoom(ctx context.Context, room store.RoomInfo) error {
+	_ = ctx
+	for i := range m.rooms {
+		if m.rooms[i].Name == room.Name {
+			m.rooms[i] = room
+			return nil
+		}
+	}
+	m.rooms = append(m.rooms, room)
+	return nil
+}
+
+func (m *mockStateStore) DeleteRoom(ctx context.Context, roomName string) error {
+	_ = ctx
+	out := m.rooms[:0]
+	for _, r := range m.rooms {
+		if r.Name != roomName {
+			out = append(out, r)
+		}
+	}
+	m.rooms = out
+	delete(m.roomMembers, roomName)
+	return nil
+}
+
+func (m *mockStateStore) GetRooms(ctx context.Context) ([]store.RoomInfo, error) {
+	_ = ctx
+	cp := make([]store.RoomInfo, len(m.rooms))
+	copy(cp, m.rooms)
+	return cp, nil
+}
+
+func (m *mockStateStore) AddClientToRoom(ctx context.Context, p store.ClientPresence) error {
+	_ = ctx
+	m.roomMembers[p.RoomName] = append(m.roomMembers[p.RoomName], p)
+	return nil
+}
+
+func (m *mockStateStore) RemoveClientFromRoom(ctx context.Context, clientID, roomName string) error {
+	_ = ctx
+	members := m.roomMembers[roomName]
+	out := members[:0]
+	for _, p := range members {
+		if p.ClientID != clientID {
+			out = append(out, p)
+		}
+	}
+	m.roomMembers[roomName] = out
+	return nil
+}
+
+func (m *mockStateStore) GetClientsInRoom(ctx context.Context, roomName string) ([]store.ClientPresence, error) {
+	_ = ctx
+	members := m.roomMembers[roomName]
+	cp := make([]store.ClientPresence, len(members))
+	copy(cp, members)
+	return cp, nil
+}
+
+func (m *mockStateStore) SetClientNode(ctx context.Context, clientID, nodeID string) error {
+	_ = ctx
+	m.locations[clientID] = nodeID
+	return nil
+}
+
+func (m *mockStateStore) RemoveClientNode(ctx context.Context, clientID string) error {
+	_ = ctx
+	delete(m.locations, clientID)
+	return nil
+}
+
+func (m *mockStateStore) ResolveClientNode(ctx context.Context, clientID string) (string, error) {
+	_ = ctx
+	return m.locations[clientID], nil
+}
+
+func (m *mockStateStore) GetClients(ctx context.Context) ([]store.ClientLocation, error) {
+	_ = ctx
+	out := make([]store.ClientLocation, 0, len(m.locations))
+	for id, node := range m.locations {
+		out = append(out, store.ClientLocation{ClientID: id, NodeID: node})
+	}
+	return out, nil
+}
+
+func startHubForClusterDispatcherTest(t *testing.T, h *hub.Hub, ctx context.Context) {
+	t.Helper()
+	go h.Run(ctx)
+	require.Eventually(t, func() bool { return h.Running() }, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestClusterDispatcher_MethodsAndState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	h := hub.NewHub(hub.DefaultHubConfig())
+	startHubForClusterDispatcherTest(t, h, ctx)
+
+	local := NewLocalDispatcher(h, map[message.EncodingType]message.Serializer{
+		message.JSON: message.NewJSONSerializer(message.DefaultSerializerConfig()),
+		message.Raw:  message.NewRawSerializer(message.DefaultSerializerConfig()),
+	})
+
+	mockCluster := NewMockClusterManager()
+	mockState := newMockStateStore()
+	d := NewClusterDispatcher(local, mockCluster, mockState, "node-1")
+
+	require.NoError(t, d.Start(ctx))
+	defer func() { _ = d.Stop() }()
+
+	require.NoError(t, d.Start(ctx))
+
+	c1 := hub.NewClient("c1", nil, nil, 16)
+	c2 := hub.NewClient("c2", nil, nil, 16)
+
+	require.NoError(t, d.RegisterClient(c1))
+	require.NoError(t, d.RegisterClient(c2))
+
+	require.Eventually(t, func() bool {
+		return h.GetClient("c1") != nil && h.GetClient("c2") != nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	_, err := d.CreateRoom("c1", "room-1")
+	require.NoError(t, err)
+	require.NoError(t, d.JoinRoom("c1", "room-1"))
+
+	rooms := d.GetRooms()
+	require.Contains(t, rooms, "room-1")
+	require.Contains(t, d.GetClients(), "c1")
+	require.Contains(t, d.GetClientsInRoom("room-1"), "c1")
+
+	direct := message.NewRawMessage(message.TextMessage, []byte("direct"))
+	require.NoError(t, d.SendToClient("c1", direct))
+	select {
+	case msg := <-c1.SendChan:
+		require.Equal(t, []byte("direct"), msg.RawData)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting send-to-client")
+	}
+
+	all := message.NewRawMessage(message.TextMessage, []byte("all"))
+	require.NoError(t, d.Broadcast(all))
+	select {
+	case <-c1.SendChan:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting broadcast c1")
+	}
+	select {
+	case <-c2.SendChan:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting broadcast c2")
+	}
+
+	roomOnly := message.NewRawMessage(message.TextMessage, []byte("room-only"))
+	require.NoError(t, d.BroadcastToRoom("room-1", roomOnly))
+	select {
+	case <-c1.SendChan:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting room broadcast")
+	}
+
+	require.NoError(t, d.LeaveRoom("c1", "room-1"))
+	require.NoError(t, d.DeleteRoom("c1", "room-1"))
+
+	globalRooms, err := d.GetRoomsGlobal(context.Background())
+	require.NoError(t, err)
+	require.Len(t, globalRooms, 0)
+
+	globalClients, err := d.GetClientsGlobal(context.Background())
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(globalClients), 2)
+
+	roomMembers, err := d.GetClientsInRoomGlobal(context.Background(), "room-1")
+	require.NoError(t, err)
+	require.Len(t, roomMembers, 0)
+
+	require.NoError(t, d.UnregisterClient("c1"))
+	require.NoError(t, d.DisconnectClient("c2"))
+	require.Eventually(t, func() bool {
+		return h.GetClient("c1") == nil && h.GetClient("c2") == nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	require.NoError(t, d.DisconnectAll())
+	require.Equal(t, Stats{}, d.GetStats())
+
+	require.NotEmpty(t, mockCluster.publishedEvents)
+}
+
+func TestClusterDispatcher_ErrorsAndFallbacks(t *testing.T) {
+	h := hub.NewHub(hub.DefaultHubConfig())
+	local := NewLocalDispatcher(h, map[message.EncodingType]message.Serializer{
+		message.JSON: message.NewJSONSerializer(message.DefaultSerializerConfig()),
+		message.Raw:  message.NewRawSerializer(message.DefaultSerializerConfig()),
+	})
+	mockCluster := NewMockClusterManager()
+
+	d := NewClusterDispatcher(local, mockCluster, nil, "node-1")
+
+	require.NoError(t, d.Start(t.Context()))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startHubForClusterDispatcherTest(t, h, ctx)
+	require.NoError(t, d.Start(ctx))
+	defer func() { _ = d.Stop() }()
+
+	require.Error(t, d.RegisterClient(nil))
+	require.Error(t, d.UnregisterClient(""))
+	require.Error(t, d.JoinRoom("", "room"))
+	require.Error(t, d.LeaveRoom("", "room"))
+	_, err := d.CreateRoom("", "room")
+	require.Error(t, err)
+	require.Error(t, d.DeleteRoom("", "room"))
+	require.Error(t, d.Broadcast(nil))
+	require.Error(t, d.BroadcastToRoom("", message.NewRawMessage(message.TextMessage, []byte("x"))))
+
+	msg := message.NewRawMessage(message.TextMessage, []byte("remote"))
+	err = d.SendToClient("missing-client", msg)
+	require.Error(t, err)
+
+	require.NoError(t, d.Stop())
+
+	require.Error(t, d.RegisterClient(hub.NewClient("late", nil, nil, 1)))
+	require.Error(t, d.UnregisterClient("late"))
+	require.Error(t, d.JoinRoom("late", "room"))
+	require.Error(t, d.LeaveRoom("late", "room"))
+	_, err = d.CreateRoom("late", "room")
+	require.Error(t, err)
+	require.Error(t, d.DeleteRoom("late", "room"))
+	require.Error(t, d.SendToClient("late", message.NewRawMessage(message.TextMessage, []byte("x"))))
+	require.Error(t, d.Broadcast(message.NewRawMessage(message.TextMessage, []byte("x"))))
+	require.Error(t, d.BroadcastToRoom("room", message.NewRawMessage(message.TextMessage, []byte("x"))))
+
+	dNoState := NewClusterDispatcher(local, mockCluster, nil, "node-1")
+	_, err = dNoState.GetRoomsGlobal(context.Background())
+	require.Error(t, err)
+	_, err = dNoState.GetClientsGlobal(context.Background())
+	require.Error(t, err)
+	_, err = dNoState.GetClientsInRoomGlobal(context.Background(), "room")
+	require.Error(t, err)
+}
+
+func TestClusterDispatcher_InternalHelpers(t *testing.T) {
+	d := &ClusterDispatcher{nodeID: "node-1"}
+	require.NoError(t, d.Stop())
+	require.True(t, d.isLocalOrigin(&cluster.Event{Origin: "node-1"}))
+	require.False(t, d.isLocalOrigin(&cluster.Event{Origin: "node-2"}))
+	require.NoError(t, d.publish(nil))
 }

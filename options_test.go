@@ -855,3 +855,23 @@ func TestServer_WithSSL(t *testing.T) {
 		})
 	}
 }
+
+func TestServer_WithProtobufSerializer(t *testing.T) {
+	server, err := NewServer(WithProtobufSerializer())
+	server = mustServer(t, server, err)
+
+	ser, exists := server.Handler().Config.Serializers[message.Protobuf]
+	assert.True(t, exists)
+	assert.IsType(t, &message.ProtobufSerializer{}, ser)
+}
+
+func TestServer_WithDebugLogger(t *testing.T) {
+	server, err := NewServer(WithDebugLogger())
+	server = mustServer(t, server, err)
+	require.NotNil(t, server.Handler().Config.Logger)
+
+	levels := server.Handler().Config.Logger.Level
+	assert.Equal(t, LogLevelDebug, levels[LogTypeServer])
+	assert.Equal(t, LogLevelDebug, levels[LogTypeClient])
+	assert.Equal(t, LogLevelError, levels[LogTypeError])
+}

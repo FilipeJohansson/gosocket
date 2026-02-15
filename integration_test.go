@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	gsErrors "github.com/FilipeJohansson/gosocket/internal/errors"
 	gsWebsocket "github.com/FilipeJohansson/gosocket/internal/transport/websocket"
 
 	"github.com/gorilla/websocket"
@@ -1144,6 +1145,8 @@ func TestIntegration_RateLimitingEnforced(t *testing.T) {
 	rlConfig.PerIPRate = 10
 	rlConfig.PerIPBurst = 10
 
+	var rateLimitEvents int32
+
 	server := newTestServer(t,
 		WithRateLimit(rlConfig),
 		OnMessage(func(m *Message, d Dispatcher, ctx *Context) error {
@@ -1153,6 +1156,16 @@ func TestIntegration_RateLimitingEnforced(t *testing.T) {
 			}
 			// echo msg
 			return d.SendToClient(client.GetID(), m)
+		}),
+		OnError(func(err error, d Dispatcher, ctx *Context) error {
+			if err == nil {
+				return nil
+			}
+
+			if err == gsErrors.ErrRateLimitExceeded || err.Error() == gsErrors.ErrRateLimitExceeded.Error() {
+				atomic.AddInt32(&rateLimitEvents, 1)
+			}
+			return nil
 		}),
 	)
 	defer server.Close()
@@ -1168,16 +1181,6 @@ func TestIntegration_RateLimitingEnforced(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	var rateLimitHits int32
-
-	for _, ws := range clients {
-		ws.SetCloseHandler(func(code int, text string) error {
-			if code == websocket.CloseTryAgainLater {
-				atomic.AddInt32(&rateLimitHits, 1)
-			}
-			return nil
-		})
-	}
 
 	for _, ws := range clients {
 		wg.Add(1)
@@ -1204,7 +1207,7 @@ func TestIntegration_RateLimitingEnforced(t *testing.T) {
 
 	wg.Wait()
 
-	require.Greater(t, atomic.LoadInt32(&rateLimitHits), int32(0), "Rate limite not enforced")
+	require.Greater(t, atomic.LoadInt32(&rateLimitEvents), int32(0), "Rate limit not enforced")
 }
 
 // Test different message types (Text, Binary, Ping, Pong)
